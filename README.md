@@ -3,6 +3,31 @@
 A menu bar readout of how much of your monthly Claude **extra-usage cap** is left.
 Native Swift, no dependencies, no network, no credentials.
 
+## Install
+
+**Requires:** macOS, [Claude Desktop](https://claude.ai/download) installed and
+signed in, and the Xcode Command Line Tools (`xcode-select --install` if you don't
+already have them — most developer machines do).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/andy-watanabe/claudmeter/main/install.sh | bash
+```
+
+This builds the app from source and launches it — nothing is downloaded as a
+prebuilt binary. Re-run the same command any time to update to the latest version.
+
+If your Mac won't run a piped script, clone and run it locally instead:
+
+```bash
+git clone https://github.com/andy-watanabe/claudmeter.git
+cd claudmeter
+./install.sh
+```
+
+**No data yet after installing?** The menu shows "No usage data yet" until Claude
+Desktop writes its first sample, which happens every ~15 minutes. Leave Claude
+Desktop open for a bit, or click the menu bar icon → Refresh Now.
+
 ## What the number means — read this first
 
 It is **not** your total monthly token allowance.
@@ -13,17 +38,17 @@ aren't exposed per user. The single meter it does report is **extra usage**: the
 pay-as-you-go spend that applies *on top of* whatever your seat includes, capped at
 $50/month.
 
-In practice, on this seat, **the $50 appears to be the whole budget.** Evidence: on
-the first-ever day of use, extra usage was already accruing 16 minutes after the
-desktop app started logging (`xu = 0.8` at 10:18, from a 10:02 start). Had there been
-an included allowance, usage would have drawn from that first and `xu` would have
-stayed at zero until it was exhausted. That, plus the empty `windows`, points to a
-seat where every request meters straight against the $50 cap.
+On at least one seat in this org, **the $50 appeared to be the whole budget** —
+extra usage was already accruing within 16 minutes of that account's first-ever
+session, which is what you'd expect if there's no included allowance underneath it
+sitting between $0 and the cap first. That's one data point, not a guarantee for
+every seat — plan configuration can vary by account. Check your own menu (or ask
+your workspace admin) rather than assuming your seat works the same way.
 
-So the menu bar number is effectively "how much of this month's Claude budget is
-left" — the ceiling where Claude stops until the cap resets or an admin raises it.
-Confirm the arrangement with your workspace admin; it can't be read authoritatively
-from this machine.
+Either way, the menu bar number is "how much of the extra-usage cap is left" — the
+ceiling where Claude stops until it resets or an admin raises it. Whether that cap
+is your *entire* monthly budget or sits on top of an included allowance is a
+per-seat question your workspace admin can answer authoritatively; this app can't.
 
 ## Where the data comes from
 
