@@ -4,11 +4,33 @@ A menu bar readout of how much of your monthly Claude **extra-usage cap** you've
 used, plus a pace estimate — are you trending to land over or under it by the time
 the cycle resets. Native Swift, no dependencies, no network, no credentials.
 
+**macOS only.** This is a menu bar app built on Cocoa/`NSStatusBar` — that concept
+doesn't exist on Windows, so there's no version of this for a PC.
+
 ## Install
 
 **Requires:** macOS, [Claude Desktop](https://claude.ai/download) installed and
 signed in, and the Xcode Command Line Tools (`xcode-select --install` if you don't
 already have them — most developer machines do).
+
+### Homebrew (recommended)
+
+```bash
+brew tap andy-watanabe/claudmeter
+brew install claudemeter
+claudemeter &
+```
+
+Builds from source at install time (no prebuilt binary is shipped), and `brew
+upgrade` pulls future updates. On first tap/install, Homebrew will ask you to run
+`brew trust andy-watanabe/claudmeter` — that's expected for any third-party tap,
+not specific to this one.
+
+`claudemeter &` starts it for the current session. To keep it running after you
+log in again, launch it once, click the menu bar icon, and toggle **Start at
+Login** from its menu.
+
+### Without Homebrew
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/andy-watanabe/claudmeter/main/install.sh | bash
