@@ -230,6 +230,39 @@ func computePace(currentPercent: Double, samples: [Sample], meterKey: String, co
                          exhaustionDate: exhaustionDate)
 }
 
+// MARK: - Menu bar icon
+
+/// The real Claude app icon, read from the locally installed Claude Desktop at
+/// runtime — never bundled or redistributed by this app, just looked up the same
+/// way Finder or the Dock would show any other app's icon.
+private let claudeAppPaths = ["/Applications/Claude.app"]
+
+func loadClaudeIcon() -> NSImage? {
+    for path in claudeAppPaths where FileManager.default.fileExists(atPath: path) {
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        icon.size = NSSize(width: 18, height: 18)
+        return icon
+    }
+    return nil
+}
+
+/// A small colored dot over the icon's corner, so status is visible from the icon
+/// alone — this doesn't depend on text-color rendering, which some menu bar font
+/// fallbacks silently ignore for certain glyphs (e.g. a plain "●" bullet).
+func badged(_ icon: NSImage, color: NSColor?) -> NSImage {
+    guard let color else { return icon }
+    let size = icon.size
+    let result = NSImage(size: size)
+    result.lockFocus()
+    icon.draw(in: NSRect(origin: .zero, size: size))
+    let diameter = size.width * 0.4
+    let rect = NSRect(x: size.width - diameter, y: 0, width: diameter, height: diameter)
+    color.setFill()
+    NSBezierPath(ovalIn: rect).fill()
+    result.unlockFocus()
+    return result
+}
+
 // MARK: - Login item
 //
 // A LaunchAgent rather than SMAppService: this app is built locally and unsigned,
@@ -266,11 +299,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var watcher: DispatchSourceFileSystemObject?
     private var timer: Timer?
+    private let baseIcon = loadClaudeIcon()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.menu = NSMenu()
         statusItem.menu?.delegate = self
+        statusItem.button?.imagePosition = .imageLeading
 
         refresh()
         startWatching()
@@ -294,17 +329,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem.button else { return }
 
         guard let reading, let headline = reading.headline else {
-            button.attributedTitle = styled("◌ —", color: .secondaryLabelColor)
+            button.image = baseIcon
+            button.attributedTitle = styled(" —", color: .secondaryLabelColor)
+            button.alphaValue = 0.5
             button.toolTip = "No usage figures recorded yet. Claude Desktop writes these every ~15 minutes."
             return
         }
 
         let used = headline.percentUsed
-        let color: NSColor = used >= 90 ? .systemRed
-            : used >= 75 ? .systemOrange
-            : .labelColor
-        let mark = reading.isStale ? "◌" : "●"
-        button.attributedTitle = styled("\(mark) \(Int(used.rounded()))%", color: color)
+        // nil means "no badge" — under the warning thresholds, the plain icon is enough.
+        let badgeColor: NSColor? = used >= 90 ? .systemRed : used >= 75 ? .systemOrange : nil
+        button.image = baseIcon.map { badged($0, color: badgeColor) }
+        button.attributedTitle = styled(" \(Int(used.rounded()))%", color: badgeColor ?? .labelColor)
+        button.alphaValue = reading.isStale ? 0.5 : 1.0
         button.toolTip = "\(label(forMeterKey: headline.key)): \(Int(used.rounded()))% of extra-usage cap used"
     }
 
@@ -360,8 +397,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         addControls(to: menu)
     }
 
-    /// The "am I trending over or under" readout: a burn rate, a projection to the
-    /// end of the cycle, and a plain-language verdict.
+    /// The "am I trending over or under" readout, kept to two lines: a verdict with
+    /// the number that matters most for it, then the raw rate for anyone who wants it.
     private func addPaceSection(to menu: NSMenu, info: (String) -> Void, currentPercent: Double,
                                  samples: [Sample], meterKey: String, config: Config) {
         guard let pace = computePace(currentPercent: currentPercent, samples: samples,
@@ -371,19 +408,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let result = verdict(currentPercent: currentPercent, projectedEndPercent: pace.projectedEndPercent)
-        info("\(result.mark) \(result.label)")
-        info(String(format: "Pace: %.1f%%/day (%@)", pace.dailyRatePercent, pace.rateBasis))
-        if let recentRate = pace.recentRatePercent, pace.rateBasis == "cycle average" {
-            info(String(format: "  (last 3h was quieter, at %.1f%%/day)", recentRate))
+        switch result {
+        case .alreadyOver:
+            info("\(result.mark) Already over — resets in \(pace.daysRemainingInCycle)d")
+        case .trendingOver:
+            if let exhaustionDate = pace.exhaustionDate {
+                let days = max(0, Int(ceil(exhaustionDate.timeIntervalSinceNow / 86400)))
+                info("\(result.mark) On pace to hit the cap in ~\(days)d")
+            } else {
+                info("\(result.mark) \(result.label) (~\(Int(pace.projectedEndPercent))% by reset)")
+            }
+        case .cuttingItClose, .trendingUnder:
+            info("\(result.mark) \(result.label) (~\(Int(pace.projectedEndPercent))% by reset)")
         }
-        info(String(format: "Projected by cycle end: %.0f%%", max(0, pace.projectedEndPercent)))
-        info("\(pace.daysRemainingInCycle) days left in this cycle")
-
-        if result == .trendingOver || result == .alreadyOver, let exhaustionDate = pace.exhaustionDate {
-            let df = DateFormatter()
-            df.dateStyle = .medium
-            info("At this pace, cap hit around \(df.string(from: exhaustionDate))")
-        }
+        info(String(format: "%.0f%%/day · %d days left in cycle", pace.dailyRatePercent, pace.daysRemainingInCycle))
     }
 
     private func addControls(to menu: NSMenu) {

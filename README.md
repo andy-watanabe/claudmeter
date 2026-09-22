@@ -64,16 +64,24 @@ says the data is stale.
 
 ## Display
 
-- `● 10%` — percent of the extra-usage cap **used**
-- Black/white under 75% used, orange at ≥75%, red at ≥90%
-- `◌` instead of `●` means the data is stale
+- The Claude logo + `10%` — percent of the extra-usage cap **used**. The icon is
+  read live from your locally installed Claude Desktop app, not bundled by
+  ClaudeMeter itself.
+- A small colored dot appears on the icon at ≥75% used (orange) and ≥90% (red);
+  under 75% the plain icon shows with no badge.
+- The whole icon fades to half-opacity when the data is stale (no fresh sample in
+  45+ minutes) — check that Claude Desktop is running.
 
-Click for the dollar figure, then the pace section:
+Click for the dollar figure, then a two-line pace readout:
 
-- **Verdict** — 🔺 trending over the cap, ⚠️ cutting it close, or ✅ trending under it
-- **Pace** — percent-of-cap consumed per day, and which window it's based on
-- **Projected by cycle end** — where that rate would land you if it holds
-- Days left in the current cycle, and (if trending over) roughly when you'd hit 100%
+- **Verdict line** — 🔺 trending over the cap (with roughly how many days until it
+  hits), ⚠️ cutting it close, or ✅ trending under it — each with the projected
+  percent (or day count) that backs it up
+- **Rate line** — percent-of-cap consumed per day, and days left in the cycle
+
+For the full breakdown (which rate window was used, the exact exhaustion date,
+etc.), run `--dump` from a terminal (below) rather than the menu — the menu is
+kept to the two lines above on purpose.
 
 Also shown: the last-updated time, Refresh Now, and a **Start at Login** toggle.
 
@@ -90,6 +98,16 @@ window instead.
 single burst of usage early on can extrapolate into a scary-looking projected
 percentage. It gets more stable as more of the cycle's actual history accumulates.
 Treat it as a trend signal, not a forecast to the decimal point.
+
+### Refresh rate
+
+The menu refreshes every 60 seconds, and also instantly whenever Claude Desktop
+actually writes a new sample (via a file watch, not polling). Going faster than
+60s wouldn't show you anything newer — Claude Desktop itself only writes a new
+sample roughly every 15 minutes, so that's the real ceiling on freshness no matter
+how often this app checks. The 60s timer only exists as a backstop in case a
+write is missed; reading a ~1-2KB JSON file that often has no measurable effect
+on CPU or battery.
 
 ## Config
 
