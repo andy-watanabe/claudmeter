@@ -239,26 +239,53 @@ private let claudeAppPaths = ["/Applications/Claude.app"]
 
 func loadClaudeIcon() -> NSImage? {
     for path in claudeAppPaths where FileManager.default.fileExists(atPath: path) {
-        let icon = NSWorkspace.shared.icon(forFile: path)
-        icon.size = NSSize(width: 18, height: 18)
-        return icon
+        return NSWorkspace.shared.icon(forFile: path)
     }
     return nil
 }
 
-/// A small colored dot over the icon's corner, so status is visible from the icon
-/// alone — this doesn't depend on text-color rendering, which some menu bar font
-/// fallbacks silently ignore for certain glyphs (e.g. a plain "●" bullet).
-func badged(_ icon: NSImage, color: NSColor?) -> NSImage {
-    guard let color else { return icon }
-    let size = icon.size
+/// Extracts just the mark from the app icon — the sunburst (and its thin outline),
+/// dropping the solid background fill — as a silhouette on a transparent
+/// background, so it can be tinted to any color afterward. Thresholded on
+/// brightness: pixels close to white become fully opaque, everything else
+/// (including partially-transparent edge pixels, to avoid anti-aliasing noise)
+/// becomes fully transparent.
+func silhouette(of icon: NSImage, pixelSize: Int = 128, threshold: CGFloat = 0.6) -> NSImage? {
+    var rect = NSRect(x: 0, y: 0, width: pixelSize, height: pixelSize)
+    guard let cgImage = icon.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
+    let width = cgImage.width, height = cgImage.height
+    guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                   bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+    guard let data = context.data else { return nil }
+
+    let buffer = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+    for i in stride(from: 0, to: width * height * 4, by: 4) {
+        let alpha = CGFloat(buffer[i + 3]) / 255
+        guard alpha > 0.95 else { buffer[i + 3] = 0; continue }
+        let luminance = 0.299 * CGFloat(buffer[i]) / 255
+            + 0.587 * CGFloat(buffer[i + 1]) / 255
+            + 0.114 * CGFloat(buffer[i + 2]) / 255
+        buffer[i + 3] = luminance > threshold ? 255 : 0
+        buffer[i] = 255; buffer[i + 1] = 255; buffer[i + 2] = 255 // color comes later; alpha carries the shape
+    }
+
+    guard let outCG = context.makeImage() else { return nil }
+    return NSImage(cgImage: outCG, size: NSSize(width: 18, height: 18))
+}
+
+/// Fills a silhouette's shape with a solid color while preserving its alpha: draw
+/// the mask, then composite a solid-color rect on top with `.sourceAtop`, which
+/// only paints where the mask already has alpha.
+func tinted(_ image: NSImage, color: NSColor) -> NSImage {
+    let size = image.size
     let result = NSImage(size: size)
     result.lockFocus()
-    icon.draw(in: NSRect(origin: .zero, size: size))
-    let diameter = size.width * 0.4
-    let rect = NSRect(x: size.width - diameter, y: 0, width: diameter, height: diameter)
-    color.setFill()
-    NSBezierPath(ovalIn: rect).fill()
+    image.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+    color.set()
+    NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
     result.unlockFocus()
     return result
 }
@@ -299,7 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var watcher: DispatchSourceFileSystemObject?
     private var timer: Timer?
-    private let baseIcon = loadClaudeIcon()
+    private let iconSilhouette = loadClaudeIcon().flatMap { silhouette(of: $0) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -329,18 +356,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem.button else { return }
 
         guard let reading, let headline = reading.headline else {
-            button.image = baseIcon
+            button.image = iconSilhouette.map { tinted($0, color: .secondaryLabelColor) }
             button.attributedTitle = styled(" —", color: .secondaryLabelColor)
             button.alphaValue = 0.5
             button.toolTip = "No usage figures recorded yet. Claude Desktop writes these every ~15 minutes."
             return
         }
 
+        // One color drives both the icon and the percentage text, so the icon's
+        // status is never out of sync with the number next to it.
         let used = headline.percentUsed
-        // nil means "no badge" — under the warning thresholds, the plain icon is enough.
-        let badgeColor: NSColor? = used >= 90 ? .systemRed : used >= 75 ? .systemOrange : nil
-        button.image = baseIcon.map { badged($0, color: badgeColor) }
-        button.attributedTitle = styled(" \(Int(used.rounded()))%", color: badgeColor ?? .labelColor)
+        let color: NSColor = used >= 90 ? .systemRed : used >= 75 ? .systemOrange : .labelColor
+        button.image = iconSilhouette.map { tinted($0, color: color) }
+        button.attributedTitle = styled(" \(Int(used.rounded()))%", color: color)
         button.alphaValue = reading.isStale ? 0.5 : 1.0
         button.toolTip = "\(label(forMeterKey: headline.key)): \(Int(used.rounded()))% of extra-usage cap used"
     }

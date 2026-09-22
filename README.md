@@ -64,13 +64,14 @@ says the data is stale.
 
 ## Display
 
-- The Claude logo + `10%` — percent of the extra-usage cap **used**. The icon is
-  read live from your locally installed Claude Desktop app, not bundled by
-  ClaudeMeter itself.
-- A small colored dot appears on the icon at ≥75% used (orange) and ≥90% (red);
-  under 75% the plain icon shows with no badge.
-- The whole icon fades to half-opacity when the data is stale (no fresh sample in
-  45+ minutes) — check that Claude Desktop is running.
+- The Claude mark + `10%` — percent of the extra-usage cap **used**. The mark is
+  extracted live from your locally installed Claude Desktop app's icon (never
+  bundled by ClaudeMeter itself) and recolored to match the percentage text, so
+  the icon and the number are always in sync — one glance at either tells you
+  the same thing.
+- Both turn orange at ≥75% used and red at ≥90%; the default color otherwise.
+- The whole thing fades to half-opacity when the data is stale (no fresh sample
+  in 45+ minutes) — check that Claude Desktop is running.
 
 Click for the dollar figure, then a two-line pace readout:
 
