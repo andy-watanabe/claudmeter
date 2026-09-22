@@ -1,7 +1,8 @@
 # ClaudeMeter
 
-A menu bar readout of how much of your monthly Claude **extra-usage cap** is left.
-Native Swift, no dependencies, no network, no credentials.
+A menu bar readout of how much of your monthly Claude **extra-usage cap** you've
+used, plus a pace estimate — are you trending to land over or under it by the time
+the cycle resets. Native Swift, no dependencies, no network, no credentials.
 
 ## Install
 
@@ -63,12 +64,32 @@ says the data is stale.
 
 ## Display
 
-- `● 90%` — percent of the extra-usage cap remaining
-- White/black at >25% left, orange at ≤25%, red at ≤10%
+- `● 10%` — percent of the extra-usage cap **used**
+- Black/white under 75% used, orange at ≥75%, red at ≥90%
 - `◌` instead of `●` means the data is stale
 
-Click for the dollar figure, the last-updated time, Refresh Now, and a
-**Start at Login** toggle.
+Click for the dollar figure, then the pace section:
+
+- **Verdict** — 🔺 trending over the cap, ⚠️ cutting it close, or ✅ trending under it
+- **Pace** — percent-of-cap consumed per day, and which window it's based on
+- **Projected by cycle end** — where that rate would land you if it holds
+- Days left in the current cycle, and (if trending over) roughly when you'd hit 100%
+
+Also shown: the last-updated time, Refresh Now, and a **Start at Login** toggle.
+
+### How the pace estimate works
+
+The rate is the higher of two numbers: the average since the start of the current
+cycle, and the rate over just the last 3 hours. Using the higher of the two is
+deliberate — a quiet afternoon right after a heavy morning shouldn't make a real
+trend disappear from the display. The cycle is assumed to reset on the calendar
+month unless you set `cycleLengthDays` in the config file (below) to use a rolling
+window instead.
+
+**Early in a cycle, with only a few samples, this projection can swing hard** — a
+single burst of usage early on can extrapolate into a scary-looking projected
+percentage. It gets more stable as more of the cycle's actual history accumulates.
+Treat it as a trend signal, not a forecast to the decimal point.
 
 ## Config
 
@@ -79,11 +100,14 @@ The dollar ceiling isn't recorded on disk anywhere, so it's set here:
 ```
 
 ```json
-{ "monthlyLimitUSD": 50 }
+{ "monthlyLimitUSD": 50, "cycleLengthDays": 30 }
 ```
 
-Defaults to 50 if the file is absent. The *percentage* is read from the log and is
-correct regardless — only the dollar readout depends on this value.
+`monthlyLimitUSD` defaults to 50 if the file is absent — the *percentage* is read
+from the log either way and is correct regardless; only the dollar readout depends
+on this value. `cycleLengthDays` is optional: omit it to assume a calendar-month
+reset (the default), or set it if your cap actually resets on a rolling N-day window
+instead.
 
 ## Build / install
 
