@@ -144,6 +144,14 @@ enum PaceVerdict: Equatable {
         case .trendingUnder: return "✅"
         }
     }
+
+    var color: NSColor {
+        switch self {
+        case .alreadyOver, .trendingOver: return .systemRed
+        case .cuttingItClose: return .systemOrange
+        case .trendingUnder: return .labelColor
+        }
+    }
 }
 
 func verdict(currentPercent: Double, projectedEndPercent: Double) -> PaceVerdict {
@@ -395,14 +403,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
     }
 
+    /// A non-interactive menu row that actually looks readable. `NSMenuItem.isEnabled
+    /// = false` was the previous approach, but that's exactly what triggers macOS's
+    /// low-contrast "disabled" text rendering — it's meant for controls that can't be
+    /// clicked right now, not status text. A custom view sidesteps that rendering
+    /// entirely, so an explicit color (severity coloring for the pace verdict, plain
+    /// label color otherwise) actually shows instead of being overridden.
+    private func infoItem(_ text: String, color: NSColor = .labelColor) -> NSMenuItem {
+        let label = NSTextField(labelWithString: text)
+        label.font = NSFont.menuFont(ofSize: 0)
+        label.textColor = color
+        label.sizeToFit()
+
+        let horizontalPadding: CGFloat = 14
+        let verticalPadding: CGFloat = 3
+        label.frame.origin = NSPoint(x: horizontalPadding, y: verticalPadding)
+
+        let container = NSView(frame: NSRect(x: 0, y: 0,
+                                              width: label.frame.width + horizontalPadding * 2,
+                                              height: label.frame.height + verticalPadding * 2))
+        container.addSubview(label)
+
+        let item = NSMenuItem()
+        item.view = container
+        return item
+    }
+
     private func rebuildMenu(_ reading: Reading?, samples: [Sample]) {
         let menu = statusItem.menu!
         menu.removeAllItems()
 
-        func info(_ text: String) {
-            let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
+        func info(_ text: String, color: NSColor = .labelColor) {
+            menu.addItem(infoItem(text, color: color))
         }
 
         guard let reading, let headline = reading.headline else {
@@ -432,9 +464,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        info("Updated \(formatter.localizedString(for: reading.sampledAt, relativeTo: Date()))")
+        info("Updated \(formatter.localizedString(for: reading.sampledAt, relativeTo: Date()))",
+             color: .secondaryLabelColor)
         if reading.isStale {
-            info("⚠︎ Stale — is Claude Desktop running?")
+            info("⚠︎ Stale — is Claude Desktop running?", color: .systemOrange)
         }
 
         addControls(to: menu)
@@ -442,29 +475,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The "am I trending over or under" readout, kept to two lines: a verdict with
     /// the number that matters most for it, then the raw rate for anyone who wants it.
-    private func addPaceSection(to menu: NSMenu, info: (String) -> Void, currentPercent: Double,
+    private func addPaceSection(to menu: NSMenu, info: (String, NSColor) -> Void, currentPercent: Double,
                                  samples: [Sample], meterKey: String, config: Config) {
         guard let pace = computePace(currentPercent: currentPercent, samples: samples,
                                       meterKey: meterKey, config: config) else {
-            info("Pace: not enough data yet")
+            info("Pace: not enough data yet", .secondaryLabelColor)
             return
         }
 
         let result = verdict(currentPercent: currentPercent, projectedEndPercent: pace.projectedEndPercent)
         switch result {
         case .alreadyOver:
-            info("\(result.mark) Already over — resets in \(pace.daysRemainingInCycle)d")
+            info("\(result.mark) Already over — resets in \(pace.daysRemainingInCycle)d", result.color)
         case .trendingOver:
             if let exhaustionDate = pace.exhaustionDate {
                 let days = max(0, Int(ceil(exhaustionDate.timeIntervalSinceNow / 86400)))
-                info("\(result.mark) On pace to hit the cap in ~\(days)d")
+                info("\(result.mark) On pace to hit the cap in ~\(days)d", result.color)
             } else {
-                info("\(result.mark) \(result.label) (~\(Int(pace.projectedEndPercent))% by reset)")
+                info("\(result.mark) \(result.label) (~\(Int(pace.projectedEndPercent))% by reset)", result.color)
             }
         case .cuttingItClose, .trendingUnder:
-            info("\(result.mark) \(result.label) (~\(Int(pace.projectedEndPercent))% by reset)")
+            info("\(result.mark) \(result.label) (~\(Int(pace.projectedEndPercent))% by reset)", result.color)
         }
-        info(String(format: "%.0f%%/day · %d days left in cycle", pace.dailyRatePercent, pace.daysRemainingInCycle))
+        info(String(format: "%.0f%%/day · %d days left in cycle", pace.dailyRatePercent, pace.daysRemainingInCycle),
+             .secondaryLabelColor)
     }
 
     private func addControls(to menu: NSMenu) {
