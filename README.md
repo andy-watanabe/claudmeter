@@ -66,10 +66,11 @@ says the data is stale.
 
 - The Claude mark + `10%` — percent of the extra-usage cap **used**. The mark is
   extracted live from your locally installed Claude Desktop app's icon (never
-  bundled by ClaudeMeter itself) and recolored to match the percentage text, so
-  the icon and the number are always in sync — one glance at either tells you
-  the same thing.
-- Both turn orange at ≥75% used and red at ≥90%; the default color otherwise.
+  bundled by ClaudeMeter itself) as a **template image**, so macOS auto-tints it
+  to match your menu bar's own text color automatically, in any theme — the same
+  mechanism behind most other menu bar icons.
+- The `10%` text turns orange at ≥75% used and red at ≥90%; the icon stays
+  neutral (that's what "template" means) and carries no color of its own.
 - The whole thing fades to half-opacity when the data is stale (no fresh sample
   in 45+ minutes) — check that Claude Desktop is running.
 

@@ -244,13 +244,21 @@ func loadClaudeIcon() -> NSImage? {
     return nil
 }
 
-/// Extracts just the mark from the app icon — the sunburst (and its thin outline),
-/// dropping the solid background fill — as a silhouette on a transparent
-/// background, so it can be tinted to any color afterward. Thresholded on
-/// brightness: pixels close to white become fully opaque, everything else
-/// (including partially-transparent edge pixels, to avoid anti-aliasing noise)
-/// becomes fully transparent.
-func silhouette(of icon: NSImage, pixelSize: Int = 128, threshold: CGFloat = 0.6) -> NSImage? {
+/// Extracts just the sunburst mark from the app icon — dropping both the solid
+/// background fill and the thin rim around its rounded-square edge — as a
+/// template image: a shape-only mask with no fixed color of its own, so AppKit
+/// auto-tints it to match the surrounding menu bar text exactly, in any theme
+/// (the same mechanism most menu bar icons use, e.g. the lock/extension icons
+/// next to this one).
+///
+/// Two passes over the pixels: brightness picks out the white mark (and,
+/// unfortunately, the rim, which is bright too); a margin around the edges then
+/// discards the rim specifically, since it hugs the icon's outer edge and the
+/// rays don't reach that far. The result is cropped tightly to the mark's own
+/// bounding box so it fills the small icon frame instead of floating in
+/// transparent padding.
+func silhouette(of icon: NSImage, pixelSize: Int = 512, threshold: CGFloat = 0.6,
+                 edgeInset: CGFloat = 0.18) -> NSImage? {
     var rect = NSRect(x: 0, y: 0, width: pixelSize, height: pixelSize)
     guard let cgImage = icon.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
     let width = cgImage.width, height = cgImage.height
@@ -262,31 +270,37 @@ func silhouette(of icon: NSImage, pixelSize: Int = 128, threshold: CGFloat = 0.6
     guard let data = context.data else { return nil }
 
     let buffer = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
-    for i in stride(from: 0, to: width * height * 4, by: 4) {
-        let alpha = CGFloat(buffer[i + 3]) / 255
-        guard alpha > 0.95 else { buffer[i + 3] = 0; continue }
-        let luminance = 0.299 * CGFloat(buffer[i]) / 255
-            + 0.587 * CGFloat(buffer[i + 1]) / 255
-            + 0.114 * CGFloat(buffer[i + 2]) / 255
-        buffer[i + 3] = luminance > threshold ? 255 : 0
-        buffer[i] = 255; buffer[i + 1] = 255; buffer[i + 2] = 255 // color comes later; alpha carries the shape
+    let insetPx = Int(CGFloat(width) * edgeInset)
+    var minX = width, maxX = 0, minY = height, maxY = 0
+
+    for y in 0..<height {
+        for x in 0..<width {
+            let i = (y * width + x) * 4
+            let alpha = CGFloat(buffer[i + 3]) / 255
+            let nearEdge = x < insetPx || x >= width - insetPx || y < insetPx || y >= height - insetPx
+            guard alpha > 0.95, !nearEdge else { buffer[i + 3] = 0; continue }
+            let luminance = 0.299 * CGFloat(buffer[i]) / 255
+                + 0.587 * CGFloat(buffer[i + 1]) / 255
+                + 0.114 * CGFloat(buffer[i + 2]) / 255
+            let keep = luminance > threshold
+            buffer[i + 3] = keep ? 255 : 0
+            buffer[i] = 255; buffer[i + 1] = 255; buffer[i + 2] = 255 // template images ignore RGB anyway
+            if keep {
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
     }
+    guard let fullCG = context.makeImage(), maxX > minX, maxY > minY else { return nil }
 
-    guard let outCG = context.makeImage() else { return nil }
-    return NSImage(cgImage: outCG, size: NSSize(width: 18, height: 18))
-}
+    let pad = Int(CGFloat(maxX - minX) * 0.06)
+    let cropRect = CGRect(x: max(0, minX - pad), y: max(0, minY - pad),
+                           width: min(width, maxX - minX + pad * 2),
+                           height: min(height, maxY - minY + pad * 2))
+    guard let croppedCG = fullCG.cropping(to: cropRect) else { return nil }
 
-/// Fills a silhouette's shape with a solid color while preserving its alpha: draw
-/// the mask, then composite a solid-color rect on top with `.sourceAtop`, which
-/// only paints where the mask already has alpha.
-func tinted(_ image: NSImage, color: NSColor) -> NSImage {
-    let size = image.size
-    let result = NSImage(size: size)
-    result.lockFocus()
-    image.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
-    color.set()
-    NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
-    result.unlockFocus()
+    let result = NSImage(cgImage: croppedCG, size: NSSize(width: 18, height: 18))
+    result.isTemplate = true
     return result
 }
 
@@ -355,19 +369,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func renderTitle(_ reading: Reading?) {
         guard let button = statusItem.button else { return }
 
+        // The icon is a template image, so it always matches the menu bar's own
+        // text color automatically — no manual color logic needed for it, in any
+        // theme. Only the percentage text carries the warning color.
+        button.image = iconSilhouette
+
         guard let reading, let headline = reading.headline else {
-            button.image = iconSilhouette.map { tinted($0, color: .secondaryLabelColor) }
             button.attributedTitle = styled(" —", color: .secondaryLabelColor)
             button.alphaValue = 0.5
             button.toolTip = "No usage figures recorded yet. Claude Desktop writes these every ~15 minutes."
             return
         }
 
-        // One color drives both the icon and the percentage text, so the icon's
-        // status is never out of sync with the number next to it.
         let used = headline.percentUsed
         let color: NSColor = used >= 90 ? .systemRed : used >= 75 ? .systemOrange : .labelColor
-        button.image = iconSilhouette.map { tinted($0, color: color) }
         button.attributedTitle = styled(" \(Int(used.rounded()))%", color: color)
         button.alphaValue = reading.isStale ? 0.5 : 1.0
         button.toolTip = "\(label(forMeterKey: headline.key)): \(Int(used.rounded()))% of extra-usage cap used"
