@@ -85,10 +85,18 @@ func loadReading(from samples: [Sample]) -> Reading? {
 // MARK: - Config
 
 struct Config {
-    /// The dollar ceiling isn't recorded anywhere on disk, so it lives in a config file.
-    var monthlyLimitUSD: Double = 50.0
     /// Pace projections assume a calendar-month reset unless this overrides it with a
     /// rolling window (in days) from the start of the current cycle.
+    ///
+    /// There's deliberately no dollar-cap setting here. That figure isn't recorded
+    /// anywhere in Claude Desktop's local data (checked, including its IndexedDB and
+    /// Local Storage caches) — the only place it exists is behind Anthropic's own
+    /// authenticated API, the same one that powers Claude Desktop's native usage
+    /// popover. Reading it would mean either extracting Claude Desktop's session
+    /// credentials to call an undocumented endpoint, or scraping its UI via the
+    /// Accessibility API — both a bigger, shakier step than this app should take
+    /// for one dollar figure. The percentage below needs none of that: it's read
+    /// directly from Claude Desktop's own log and is always correct.
     var cycleLengthDays: Int?
 }
 
@@ -97,7 +105,6 @@ func loadConfig() -> Config {
     guard let data = FileManager.default.contents(atPath: configPath),
           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return config }
-    if let limit = root["monthlyLimitUSD"] as? Double { config.monthlyLimitUSD = limit }
     if let days = root["cycleLengthDays"] as? Int { config.cycleLengthDays = days }
     return config
 }
@@ -448,9 +455,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let used = headline.percentUsed
         info("\(Int(used.rounded()))% of extra-usage cap used")
 
-        let spent = config.monthlyLimitUSD * used / 100
-        info(String(format: "$%.2f of $%.2f used", spent, config.monthlyLimitUSD))
-
         // Anything beyond the headline meter, shown rather than hidden.
         for (key, otherUsed) in reading.meters.sorted(by: { $0.key < $1.key }) where key != headline.key {
             info(String(format: "%@: %.0f%% used", label(forMeterKey: key), otherUsed))
@@ -572,7 +576,6 @@ if CommandLine.arguments.contains("--dump") {
     let config = loadConfig()
     let used = headline.percentUsed
     print(String(format: "used:       %.0f%%", used))
-    print(String(format: "spent:      $%.2f of $%.2f", config.monthlyLimitUSD * used / 100, config.monthlyLimitUSD))
     print("headline:   \(label(forMeterKey: headline.key)) (\(headline.key))")
     print("meters:     \(reading.meters.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))")
     print("sampled:    \(reading.sampledAt)\(reading.isStale ? "  [stale]" : "")")

@@ -58,20 +58,18 @@ It is **not** your total monthly token allowance.
 Your account is on an **Enterprise** plan. The usage API reports no 5-hour or weekly
 rate-limit windows for this seat — on Enterprise those are administered org-side and
 aren't exposed per user. The single meter it does report is **extra usage**: the
-pay-as-you-go spend that applies *on top of* whatever your seat includes, capped at
-$50/month.
+pay-as-you-go spend that applies *on top of* whatever your seat includes.
 
-On at least one seat in this org, **the $50 appeared to be the whole budget** —
-extra usage was already accruing within 16 minutes of that account's first-ever
-session, which is what you'd expect if there's no included allowance underneath it
-sitting between $0 and the cap first. That's one data point, not a guarantee for
-every seat — plan configuration can vary by account. Check your own menu (or ask
-your workspace admin) rather than assuming your seat works the same way.
+**The actual dollar cap varies by seat** — it isn't a fixed org-wide number, so
+ClaudeMeter never shows one (see below for why it can't, even if it wanted to).
+Check Claude Desktop's own menu bar item for your specific figure, or ask your
+workspace admin.
 
-Either way, the menu bar number is "how much of the extra-usage cap is left" — the
-ceiling where Claude stops until it resets or an admin raises it. Whether that cap
-is your *entire* monthly budget or sits on top of an included allowance is a
-per-seat question your workspace admin can answer authoritatively; this app can't.
+Either way, the percentage ClaudeMeter shows is "how much of *your* extra-usage
+cap is used" — the ceiling where Claude stops until it resets or an admin raises
+it. Whether that cap is your entire monthly budget or sits on top of an included
+allowance is a per-seat question your workspace admin can answer authoritatively;
+this app can't.
 
 ## Where the data comes from
 
@@ -96,7 +94,7 @@ says the data is stale.
 - The whole thing fades to half-opacity when the data is stale (no fresh sample
   in 45+ minutes) — check that Claude Desktop is running.
 
-Click for the dollar figure, then a two-line pace readout:
+Click for a two-line pace readout:
 
 - **Verdict line** — 🔺 trending over the cap (with roughly how many days until it
   hits), ⚠️ cutting it close, or ✅ trending under it — each with the projected
@@ -135,21 +133,32 @@ on CPU or battery.
 
 ## Config
 
-The dollar ceiling isn't recorded on disk anywhere, so it's set here:
-
 ```
 ~/.config/claude-meter/config.json
 ```
 
 ```json
-{ "monthlyLimitUSD": 50, "cycleLengthDays": 30 }
+{ "cycleLengthDays": 30 }
 ```
 
-`monthlyLimitUSD` defaults to 50 if the file is absent — the *percentage* is read
-from the log either way and is correct regardless; only the dollar readout depends
-on this value. `cycleLengthDays` is optional: omit it to assume a calendar-month
-reset (the default), or set it if your cap actually resets on a rolling N-day window
+Optional and rarely needed: omit it to assume a calendar-month reset (the
+default, and the one confirmed correct by Claude Desktop's own popover saying
+"resets Oct 1"), or set it if your cap actually resets on a rolling N-day window
 instead.
+
+**There's no dollar-amount setting**, on purpose. An earlier version asked you to
+manually enter your cap's dollar value here, because that figure isn't recorded
+anywhere in Claude Desktop's local data — confirmed by searching its entire
+`Application Support` directory, including the Electron `IndexedDB`/`Local
+Storage` caches an app like this would normally use, and finding nothing. The
+only place it exists is behind Anthropic's own authenticated API — the same one
+powering Claude Desktop's native usage popover. Reading it would require either
+extracting Claude Desktop's session credentials to call an undocumented
+endpoint, or scraping its UI via the Accessibility API; both are a bigger, more
+fragile step than a menu bar percentage indicator should take. So instead of
+asking you to babysit a number the app couldn't verify, ClaudeMeter just doesn't
+show one — the percentage needs no configuration and is always correct, straight
+from Claude Desktop's own log.
 
 ## Build / install
 
