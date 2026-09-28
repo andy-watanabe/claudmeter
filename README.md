@@ -78,9 +78,19 @@ Claude Desktop appends to every ~15 minutes. ClaudeMeter reads it directly and
 watches it for changes, so it updates as soon as the desktop app records a new
 sample.
 
-**This means the reading only advances while Claude Desktop is running.** If the
-last sample is more than 45 minutes old, the dot turns hollow (`◌`) and the menu
-says the data is stale.
+**Most samples carry no figure.** Claude Desktop writes an entry every ~15
+minutes, but usually with an empty payload; an actual percentage lands every
+1–2.5 hours. So "Claude Desktop stopped writing" and "the figure hasn't changed
+yet" are different things, and ClaudeMeter treats them differently:
+
+| What's happening | What you see |
+|---|---|
+| Normal — polling, figure current | Nothing; just the figure's timestamp |
+| Polling fine, but no new figure in 4h+ | A quiet note that Claude hasn't reported one |
+| No sample at all in 45min+ | ⚠︎ warning that Claude Desktop isn't logging, and the display dims |
+
+Only the last case means something is actually wrong. The reading only advances
+while Claude Desktop is running.
 
 ## Display
 
@@ -91,8 +101,9 @@ says the data is stale.
   mechanism behind most other menu bar icons.
 - The `10%` text turns orange at ≥75% used and red at ≥90%; the icon stays
   neutral (that's what "template" means) and carries no color of its own.
-- The whole thing fades to half-opacity when the data is stale (no fresh sample
-  in 45+ minutes) — check that Claude Desktop is running.
+- The whole thing fades to half-opacity only when Claude Desktop has stopped
+  writing to the log entirely (see the table above) — a figure that simply
+  hasn't moved yet is still the correct current value, so it isn't dimmed.
 
 Click for a two-line pace readout:
 

@@ -15,12 +15,27 @@ import Cocoa
 // The pace estimate needs the *history* of samples, not just the latest one, so we
 // keep the whole array in memory rather than just scanning for the last non-empty one.
 
-let usageLogPath = NSString(string: "~/Library/Application Support/Claude/plan-usage-history.json")
-    .expandingTildeInPath
+/// Overridable so the health/pace logic can be exercised against fixture logs
+/// (real ones take hours to produce the states worth testing).
+let usageLogPath = ProcessInfo.processInfo.environment["CLAUDEMETER_LOG_PATH"]
+    ?? NSString(string: "~/Library/Application Support/Claude/plan-usage-history.json")
+        .expandingTildeInPath
 let configPath = NSString(string: "~/.config/claude-meter/config.json").expandingTildeInPath
 
-/// Claude Desktop polls roughly every 15 minutes; past this we stop trusting the number.
-let stalenessThreshold: TimeInterval = 45 * 60
+// Claude Desktop writes a sample to the log every ~15 minutes, but most of them
+// carry no figure at all -- an empty `u`. Actual figures land every 1-2.5 hours.
+// So "the log stopped being written" and "the figure hasn't changed" are two
+// different conditions with two different causes, and conflating them (as an
+// earlier version did, warning after 45 minutes without a figure) produces a
+// warning that fires constantly during completely normal operation.
+
+/// No sample of any kind in this long means Claude Desktop isn't writing -- it
+/// polls every ~15 min, so three missed polls is a real signal.
+let pollGapThreshold: TimeInterval = 45 * 60
+
+/// Figures update far less often than polls. Only flag one as lagging well past
+/// the widest normal gap actually observed in the log.
+let figureGapThreshold: TimeInterval = 4 * 60 * 60
 
 // MARK: - Model
 
@@ -28,6 +43,34 @@ let stalenessThreshold: TimeInterval = 45 * 60
 struct Sample {
     var date: Date
     var meters: [String: Double]
+}
+
+/// What's in the log, split by the distinction above.
+struct UsageLog {
+    /// Only the samples carrying a figure.
+    var samples: [Sample]
+    /// The most recent sample of any kind, empty ones included -- i.e. the last
+    /// time Claude Desktop demonstrably did anything.
+    var lastPollAt: Date?
+}
+
+/// Why the number on screen might not be current. These need different wording:
+/// telling someone to check whether Claude Desktop is running, when it's running
+/// fine and just hasn't had a new figure to report, sends them after a non-problem.
+enum DataHealth {
+    case fresh
+    case figureLagging
+    case notPolling
+
+    /// Only a genuinely stalled log justifies dimming the display -- a figure
+    /// that simply hasn't moved is still the correct current value.
+    var shouldDim: Bool { self == .notPolling }
+}
+
+func dataHealth(figureAt: Date, lastPollAt: Date?, now: Date = Date()) -> DataHealth {
+    if let lastPollAt, now.timeIntervalSince(lastPollAt) > pollGapThreshold { return .notPolling }
+    if now.timeIntervalSince(figureAt) > figureGapThreshold { return .figureLagging }
+    return .fresh
 }
 
 struct Reading {
@@ -42,8 +85,6 @@ struct Reading {
         guard let worst = meters.max(by: { $0.value < $1.value }) else { return nil }
         return (worst.key, worst.value)
     }
-
-    var isStale: Bool { Date().timeIntervalSince(sampledAt) > stalenessThreshold }
 }
 
 func label(forMeterKey key: String) -> String {
@@ -54,27 +95,33 @@ func label(forMeterKey key: String) -> String {
 
 // MARK: - Reading the log
 
-func loadSamples() -> [Sample] {
+func loadLog() -> UsageLog {
     guard let data = FileManager.default.contents(atPath: usageLogPath),
           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let rawSamples = root["samples"] as? [[String: Any]]
-    else { return [] }
+    else { return UsageLog(samples: [], lastPollAt: nil) }
 
     var samples: [Sample] = []
-    for sample in rawSamples {
-        guard let raw = sample["u"] as? [String: Any], !raw.isEmpty,
-              let millis = sample["t"] as? Double
-        else { continue }
+    var lastPollAt: Date?
 
+    for sample in rawSamples {
+        guard let millis = sample["t"] as? Double else { continue }
+        let date = Date(timeIntervalSince1970: millis / 1000)
+
+        // Every sample counts as a poll, figure or not -- that's the whole point
+        // of tracking it separately.
+        if lastPollAt == nil || date > lastPollAt! { lastPollAt = date }
+
+        guard let raw = sample["u"] as? [String: Any], !raw.isEmpty else { continue }
         var meters: [String: Double] = [:]
         for (key, value) in raw {
             if let number = value as? Double { meters[key] = number }
         }
         guard !meters.isEmpty else { continue }
 
-        samples.append(Sample(date: Date(timeIntervalSince1970: millis / 1000), meters: meters))
+        samples.append(Sample(date: date, meters: meters))
     }
-    return samples
+    return UsageLog(samples: samples, lastPollAt: lastPollAt)
 }
 
 func loadReading(from samples: [Sample]) -> Reading? {
@@ -375,13 +422,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Display
 
     @objc func refresh() {
-        let samples = loadSamples()
-        let reading = loadReading(from: samples)
-        renderTitle(reading)
-        rebuildMenu(reading, samples: samples)
+        let log = loadLog()
+        let reading = loadReading(from: log.samples)
+        let health = reading.map { dataHealth(figureAt: $0.sampledAt, lastPollAt: log.lastPollAt) }
+        renderTitle(reading, health: health)
+        rebuildMenu(reading, log: log, health: health)
     }
 
-    private func renderTitle(_ reading: Reading?) {
+    private func renderTitle(_ reading: Reading?, health: DataHealth?) {
         guard let button = statusItem.button else { return }
 
         // The icon is a template image, so it always matches the menu bar's own
@@ -399,7 +447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let used = headline.percentUsed
         let color: NSColor = used >= 90 ? .systemRed : used >= 75 ? .systemOrange : .labelColor
         button.attributedTitle = styled(" \(Int(used.rounded()))%", color: color)
-        button.alphaValue = reading.isStale ? 0.5 : 1.0
+        button.alphaValue = (health?.shouldDim ?? false) ? 0.5 : 1.0
         button.toolTip = "\(label(forMeterKey: headline.key)): \(Int(used.rounded()))% of extra-usage cap used"
     }
 
@@ -436,7 +484,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return item
     }
 
-    private func rebuildMenu(_ reading: Reading?, samples: [Sample]) {
+    private func rebuildMenu(_ reading: Reading?, log: UsageLog, health: DataHealth?) {
         let menu = statusItem.menu!
         menu.removeAllItems()
 
@@ -461,17 +509,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
-        addPaceSection(to: menu, info: info, currentPercent: used, samples: samples,
+        addPaceSection(to: menu, info: info, currentPercent: used, samples: log.samples,
                        meterKey: headline.key, config: config)
 
         menu.addItem(.separator())
 
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        info("Updated \(formatter.localizedString(for: reading.sampledAt, relativeTo: Date()))",
+        info("Figure from \(formatter.localizedString(for: reading.sampledAt, relativeTo: Date()))",
              color: .secondaryLabelColor)
-        if reading.isStale {
-            info("⚠︎ Stale — is Claude Desktop running?", color: .systemOrange)
+
+        switch health {
+        case .notPolling:
+            // The log itself has stalled, so Claude Desktop really is the thing
+            // to check -- this is the only case where that advice is right.
+            info("⚠︎ Claude Desktop isn't logging — figures are frozen", color: .systemOrange)
+        case .figureLagging:
+            info("Claude hasn't reported a new figure in a while", color: .secondaryLabelColor)
+        case .fresh, .none:
+            break
         }
 
         addControls(to: menu)
@@ -568,17 +624,21 @@ extension AppDelegate: NSMenuDelegate {
 // `--dump` runs the same read path as the menu bar and prints the result, for
 // checking the numbers or piping them somewhere else.
 if CommandLine.arguments.contains("--dump") {
-    let samples = loadSamples()
+    let log = loadLog()
+    let samples = log.samples
     guard let reading = loadReading(from: samples), let headline = reading.headline else {
         print("no usage data in \(usageLogPath)")
         exit(1)
     }
     let config = loadConfig()
     let used = headline.percentUsed
+    let health = dataHealth(figureAt: reading.sampledAt, lastPollAt: log.lastPollAt)
     print(String(format: "used:       %.0f%%", used))
     print("headline:   \(label(forMeterKey: headline.key)) (\(headline.key))")
     print("meters:     \(reading.meters.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))")
-    print("sampled:    \(reading.sampledAt)\(reading.isStale ? "  [stale]" : "")")
+    print("figure at:  \(reading.sampledAt)")
+    print("last poll:  \(log.lastPollAt.map { "\($0)" } ?? "never")")
+    print("health:     \(health)")
 
     if let pace = computePace(currentPercent: used, samples: samples, meterKey: headline.key, config: config) {
         let result = verdict(currentPercent: used, projectedEndPercent: pace.projectedEndPercent)
