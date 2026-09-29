@@ -1,20 +1,48 @@
 # ClaudeMeter
 
-A menu bar readout of how much of your Claude usage limits you've used — the
-monthly **extra-usage cap**, or the **5-hour / 7-day windows**, whichever your org
-reports — plus a pace estimate: are you trending to land over or under the limit by
-the time it resets. Native Swift, no dependencies, no network, no credentials.
+See how much of your Claude usage limit you've used, right in your Mac's menu bar,
+and whether you're on pace to run out before it resets.
 
-**macOS only.** This is a menu bar app built on Cocoa/`NSStatusBar` — that concept
-doesn't exist on Windows, so there's no version of this for a PC.
+<img src="docs/menubar.png" alt="The menu bar showing the Claude mark, 5%, and a 7d tag" width="85">
 
-## Install
+It works with whatever limits your Claude org has: a **monthly** cap, a **5-hour**
+and **7-day** window, or both. It reads Claude Desktop's own local log. Nothing is
+sent anywhere, and it needs no password or API key.
 
-**Requires:** macOS, [Claude Desktop](https://claude.ai/download) installed and
-signed in, and the Xcode Command Line Tools (`xcode-select --install` if you don't
-already have them — most developer machines do).
+**Needs:** a Mac, with [Claude Desktop](https://claude.ai/download) installed and
+signed in.
 
-### Homebrew (recommended)
+## Get it running
+
+Pick one.
+
+### Option 1: Ask Claude to set it up
+
+If you have Claude Code (in the terminal, or the Code tab in Claude Desktop),
+paste this in:
+
+```text
+Clone https://github.com/andy-watanabe/claudmeter into ~/claudmeter, read its
+CLAUDE.md, and follow it to set ClaudeMeter up for me. Then explain my numbers.
+```
+
+Claude installs any missing tools, builds the app, starts it, and tells you what
+your limits are and where you stand. If something goes wrong, it fixes it.
+
+### Option 2: Download the app
+
+1. Download [ClaudeMeter.zip](https://github.com/andy-watanabe/claudmeter/releases/latest/download/ClaudeMeter.zip)
+   and double-click it to unzip.
+2. Drag **ClaudeMeter** into your **Applications** folder, and open it.
+3. macOS will say it can't verify the app. That's because it isn't signed by a
+   paid Apple developer account, not because anything is wrong with it. Click
+   **Done**, then open **System Settings → Privacy & Security**, scroll down, and
+   click **Open Anyway** next to ClaudeMeter. You only do this once.
+4. Click the new menu bar icon and turn on **Start at Login**.
+
+To update, download it again and replace the old copy.
+
+### Option 3: Homebrew or script (for developers)
 
 ```bash
 brew tap andy-watanabe/claudmeter
@@ -22,200 +50,142 @@ brew install claudemeter
 claudemeter &
 ```
 
-Builds from source at install time (no prebuilt binary is shipped), and `brew
-upgrade` pulls future updates. On first tap/install, Homebrew will ask you to run
-`brew trust andy-watanabe/claudmeter` — that's expected for any third-party tap,
-not specific to this one.
-
-`claudemeter &` starts it for the current session. To keep it running after you
-log in again, launch it once, click the menu bar icon, and toggle **Start at
-Login** from its menu.
-
-### Without Homebrew
+Or, without Homebrew:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/andy-watanabe/claudmeter/main/install.sh | bash
 ```
 
-This builds the app from source and launches it — nothing is downloaded as a
-prebuilt binary. Re-run the same command any time to update to the latest version.
+Both build from source, which needs the Xcode Command Line Tools
+(`xcode-select --install`). Re-run the script, or `brew upgrade`, to update.
 
-If your Mac won't run a piped script, clone and run it locally instead:
+**No number yet?** The menu says "No usage data yet" until Claude Desktop records
+its first figure, which can take about 15 minutes. Leave Claude Desktop open.
 
-```bash
-git clone https://github.com/andy-watanabe/claudmeter.git
-cd claudmeter
-./install.sh
-```
+## Reading it
 
-**No data yet after installing?** The menu shows "No usage data yet" until Claude
-Desktop writes its first sample, which happens every ~15 minutes. Leave Claude
-Desktop open for a bit, or click the menu bar icon → Refresh Now.
+The number is **percent used**. The tag next to it says which limit it is:
 
-## What the number means — read this first
+| Tag | Limit | Resets |
+|---|---|---|
+| `mo` | Monthly extra-usage cap | Start of each month |
+| `5h` | 5-hour window | About 5 hours after it starts |
+| `7d` | 7-day window | About 7 days after it starts |
 
-It is **not** your total monthly token allowance.
+The number turns orange at 75% and red at 90%.
 
-**What gets reported depends on the org.** Claude Desktop logs one or more meters
-per sample, each a percent used:
+**What happens at 100%?** You can't send more messages until that limit resets.
+If your org has extra usage turned on, you may be able to keep going and be billed
+instead. For the monthly cap, 100% means the extra spend is used up until the
+month resets or an admin raises it.
 
-| Key | Shown as | Resets | Notes |
-|---|---|---|---|
-| `xu` | Extra usage | Billing cycle (calendar month, or `cycleLengthDays`) | Pay-as-you-go spend on top of what the seat includes |
-| `fh` | 5-hour window | ~5h after the window starts | Inferred, not documented |
-| `sd` | 7-day window | ~7d after the window starts | Inferred, not documented |
+**Click the icon** for more:
 
-One Enterprise org reported only `xu`; another reports only `fh` and `sd`. When
-`xu` is present it's the headline; otherwise the 7-day window is (it's the one that
-can lock you out for days); failing both, whichever meter is furthest along. When
-there's more than one meter, **Show in Menu Bar** in the menu lets you pick which one
-the menu bar shows; the choice sticks across restarts. Unknown keys are shown as-is, with no pace estimate.
+- **Limits:** what your org has, e.g. "Limits: 5-hour + 7-day windows (no monthly
+  budget)". If it says no monthly budget, you don't have one, even if you assumed
+  you did.
+- Every limit's percent used.
+- **Pace:** ✅ trending under, ⚠️ cutting it close, or 🔺 on pace to hit the limit
+  (and roughly when). Plus your rate, and time until reset.
+- **Show in Menu Bar:** if you have more than one limit, pick which one the menu
+  bar shows. It defaults to the monthly cap if you have one, otherwise the 7-day
+  window.
+- **Start at Login**, **Refresh Now**, **Quit**.
 
-**Budgets are per org, and so is the display.** The log is shared across orgs — if
-you switch, new samples just carry a different `org` ID. ClaudeMeter only reads
-samples from the org Claude Desktop most recently logged, and shows that org's
-short ID in the menu.
+## Good to know
 
-The rest of this section is about the extra-usage meter.
+- **The 5-hour and 7-day labels are a best guess.** Claude Desktop logs them as
+  `fh` and `sd` without saying what they are. `fh` behaves like a 5-hour window.
+  `sd` has been seen resetting overnight, which doesn't fit a true 7-day window,
+  so treat its reset time as rough.
+- **No dollar amounts.** Your cap's dollar value isn't stored anywhere on your
+  Mac, so ClaudeMeter can't show it. Claude Desktop's own usage popover, or your
+  admin, has it.
+- **Early in a cycle, the pace swings.** One busy morning can look like you're
+  heading over. It settles as more data comes in.
+- **One org at a time.** If you switch Claude orgs, ClaudeMeter follows the one
+  Claude Desktop is signed into now, and shows its short ID in the menu.
+- **It only updates while Claude Desktop is running.** If Claude Desktop stops
+  logging, the menu bar dims and the menu says so.
 
-**The actual dollar cap varies by seat** — it isn't a fixed org-wide number, so
-ClaudeMeter never shows one (see below for why it can't, even if it wanted to).
-Check Claude Desktop's own menu bar item for your specific figure, or ask your
-workspace admin.
+## Uninstall
 
-Either way, the percentage ClaudeMeter shows is "how much of *your* extra-usage
-cap is used" — the ceiling where Claude stops until it resets or an admin raises
-it. Whether that cap is your entire monthly budget or sits on top of an included
-allowance is a per-seat question your workspace admin can answer authoritatively;
-this app can't.
+Turn off **Start at Login** in the menu, click **Quit**, then delete ClaudeMeter
+from your Applications folder (or `~/Applications`). Homebrew: `brew uninstall
+claudemeter`.
 
-## Where the data comes from
+## Details
 
-`~/Library/Application Support/Claude/plan-usage-history.json` — the sample log
-Claude Desktop appends to every ~15 minutes. ClaudeMeter reads it directly and
-watches it for changes, so it updates as soon as the desktop app records a new
-sample.
+<details>
+<summary>Where the data comes from</summary>
 
-**Most samples carry no figure.** Claude Desktop writes an entry every ~15
-minutes, but usually with an empty payload; an actual percentage lands every
-1–2.5 hours. So "Claude Desktop stopped writing" and "the figure hasn't changed
-yet" are different things, and ClaudeMeter treats them differently:
+`~/Library/Application Support/Claude/plan-usage-history.json`, the log Claude
+Desktop appends to every ~15 minutes. ClaudeMeter watches it and updates when it
+changes, with a 60-second check as a backstop.
+
+Most entries carry no figure; an actual percentage lands every 1–2.5 hours. So
+"Claude Desktop stopped logging" and "the figure hasn't changed" are different
+things:
 
 | What's happening | What you see |
 |---|---|
-| Normal — polling, figure current | Nothing; just the figure's timestamp |
-| Polling fine, but no new figure in 4h+ | A quiet note that Claude hasn't reported one |
-| No sample at all in 45min+ | ⚠︎ warning that Claude Desktop isn't logging, and the display dims |
+| Logging, figure current | Just the figure's timestamp |
+| Logging, but no new figure in 4h+ | A quiet note in the menu |
+| No log entry at all in 45min+ | ⚠︎ warning, and the menu bar dims |
 
-Only the last case means something is actually wrong. The reading only advances
-while Claude Desktop is running.
+Only the last one means something is wrong.
 
-## Display
+The log is shared across orgs; each entry carries an `org` ID. ClaudeMeter only
+uses entries from the org that logged most recently, since budgets are per org.
 
-- The Claude mark + `10% mo` — percent of the headline meter **used**, plus a tag
-  for which limit it is: `mo` for the monthly extra-usage cap (or `30d` if you set
-  `cycleLengthDays`), `5h` or `7d` for the windows. Orgs differ, so the number alone
-  could be read as a monthly budget when it's really a 5-hour window. The mark is
-  extracted live from your locally installed Claude Desktop app's icon (never
-  bundled by ClaudeMeter itself) as a **template image**, so macOS auto-tints it
-  to match your menu bar's own text color automatically, in any theme — the same
-  mechanism behind most other menu bar icons.
-- The `10%` text turns orange at ≥75% used and red at ≥90%; the icon stays
-  neutral (that's what "template" means) and carries no color of its own.
-- The whole thing fades to half-opacity only when Claude Desktop has stopped
-  writing to the log entirely (see the table above) — a figure that simply
-  hasn't moved yet is still the correct current value, so it isn't dimmed.
+</details>
 
-Click for the menu. The top line says what kind of limits your org has, e.g.
-"Limits: 5-hour + 7-day windows (no monthly budget)" or "Limits: monthly cap".
-Below that, every meter's percent used, then a two-line pace readout:
+<details>
+<summary>How the pace estimate works</summary>
 
-- **Verdict line** — 🔺 trending over the limit (with roughly how long until it
-  hits), ⚠️ cutting it close, or ✅ trending under it — each with the projected
-  percent (or time left) that backs it up
-- **Rate line** — percent used per day (per hour for the windows), and time until
-  the reset
+The rate is the higher of two: the average since the current cycle started, and
+the rate over the last 3 hours. Taking the higher one means a quiet afternoon
+after a heavy morning doesn't hide a real trend.
 
-For the full breakdown (which rate window was used, the exact exhaustion date,
-etc.), run `--dump` from a terminal (below) rather than the menu — the menu is
-kept to the two lines above on purpose.
+The monthly cap is assumed to reset on the calendar month. For the 5-hour and
+7-day windows the reset isn't in the log, so it's estimated: the first figure
+after the last drop marks the window's start, and the reset is 5h or 7d after
+that. It can run late by up to one gap between figures. Once that estimated reset
+passes, the menu waits for a new figure instead of projecting from a stale one.
 
-Also shown: the last-updated time, Refresh Now, and a **Start at Login** toggle.
+</details>
 
-### How the pace estimate works
+<details>
+<summary>Config</summary>
 
-The rate is the higher of two numbers: the average since the start of the current
-cycle, and the rate over just the last 3 hours. Using the higher of the two is
-deliberate — a quiet afternoon right after a heavy morning shouldn't make a real
-trend disappear from the display. The cycle is assumed to reset on the calendar
-month unless you set `cycleLengthDays` in the config file (below) to use a rolling
-window instead.
-
-For the 5-hour and 7-day windows, the reset isn't in the log, so it's estimated:
-the first figure after the last drop to a lower value marks the window's start,
-and the reset is 5h (or 7d) after that. It can run late by up to one gap between
-figures. Once that estimated reset has passed, the menu says the window may have
-reset and waits for a new figure instead of projecting from a stale one.
-
-**Early in a cycle, with only a few samples, this projection can swing hard** — a
-single burst of usage early on can extrapolate into a scary-looking projected
-percentage. It gets more stable as more of the cycle's actual history accumulates.
-Treat it as a trend signal, not a forecast to the decimal point.
-
-### Refresh rate
-
-The menu refreshes every 60 seconds, and also instantly whenever Claude Desktop
-actually writes a new sample (via a file watch, not polling). Going faster than
-60s wouldn't show you anything newer — Claude Desktop itself only writes a new
-sample roughly every 15 minutes, so that's the real ceiling on freshness no matter
-how often this app checks. The 60s timer only exists as a backstop in case a
-write is missed; reading a ~1-2KB JSON file that often has no measurable effect
-on CPU or battery.
-
-## Config
-
-```
-~/.config/claude-meter/config.json
-```
+`~/.config/claude-meter/config.json`, optional:
 
 ```json
 { "cycleLengthDays": 30 }
 ```
 
-Optional and rarely needed: omit it to assume a calendar-month reset (the
-default, and the one confirmed correct by Claude Desktop's own popover saying
-"resets Oct 1"), or set it if your cap actually resets on a rolling N-day window
-instead.
+Only set this if your monthly cap resets on a rolling N-day cycle rather than the
+calendar month.
 
-**There's no dollar-amount setting**, on purpose. An earlier version asked you to
-manually enter your cap's dollar value here, because that figure isn't recorded
-anywhere in Claude Desktop's local data — confirmed by searching its entire
-`Application Support` directory, including the Electron `IndexedDB`/`Local
-Storage` caches an app like this would normally use, and finding nothing. The
-only place it exists is behind Anthropic's own authenticated API — the same one
-powering Claude Desktop's native usage popover. Reading it would require either
-extracting Claude Desktop's session credentials to call an undocumented
-endpoint, or scraping its UI via the Accessibility API; both are a bigger, more
-fragile step than a menu bar percentage indicator should take. So instead of
-asking you to babysit a number the app couldn't verify, ClaudeMeter just doesn't
-show one — the percentage needs no configuration and is always correct, straight
-from Claude Desktop's own log.
+There's no dollar setting on purpose: the figure isn't stored locally, and
+reading it would mean using Claude Desktop's login to call an undocumented API.
 
-## Build / install
+</details>
 
-```bash
-./build.sh
-cp -R ClaudeMeter.app ~/Applications/
-```
-
-## Check the numbers from a terminal
+<details>
+<summary>Check the numbers from a terminal</summary>
 
 ```bash
 ~/Applications/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --dump
 ```
 
-## Uninstall
+Prints every meter, the pace math, and the projected reset.
 
-Quit from the menu, untick Start at Login first (or delete
-`~/Library/LaunchAgents/com.local.claudemeter.plist`), then remove
-`~/Applications/ClaudeMeter.app`.
+</details>
+
+<details>
+<summary>Building and releasing</summary>
+
+See [CLAUDE.md](CLAUDE.md) for build, test, and release steps.
+
+</details>

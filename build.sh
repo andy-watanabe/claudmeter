@@ -27,10 +27,24 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-swiftc -O \
-    -o "$APP/Contents/MacOS/ClaudeMeter" \
-    main.swift \
-    -framework Cocoa
+# UNIVERSAL=1 builds for both Apple Silicon and Intel, for the downloadable
+# release. A local build only needs this Mac's architecture.
+if [ "${UNIVERSAL:-0}" = 1 ]; then
+    for arch in arm64 x86_64; do
+        swiftc -O -target "$arch-apple-macos13.0" \
+            -o "$APP/Contents/MacOS/ClaudeMeter-$arch" \
+            main.swift \
+            -framework Cocoa
+    done
+    lipo -create -output "$APP/Contents/MacOS/ClaudeMeter" \
+        "$APP/Contents/MacOS/ClaudeMeter-arm64" "$APP/Contents/MacOS/ClaudeMeter-x86_64"
+    rm "$APP/Contents/MacOS/ClaudeMeter-arm64" "$APP/Contents/MacOS/ClaudeMeter-x86_64"
+else
+    swiftc -O \
+        -o "$APP/Contents/MacOS/ClaudeMeter" \
+        main.swift \
+        -framework Cocoa
+fi
 
 # Ad-hoc signature keeps Gatekeeper quiet for a locally built binary.
 codesign --force --sign - "$APP" 2>/dev/null || true
