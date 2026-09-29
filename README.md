@@ -1,8 +1,9 @@
 # ClaudeMeter
 
-A menu bar readout of how much of your monthly Claude **extra-usage cap** you've
-used, plus a pace estimate — are you trending to land over or under it by the time
-the cycle resets. Native Swift, no dependencies, no network, no credentials.
+A menu bar readout of how much of your Claude usage limits you've used — the
+monthly **extra-usage cap**, or the **5-hour / 7-day windows**, whichever your org
+reports — plus a pace estimate: are you trending to land over or under the limit by
+the time it resets. Native Swift, no dependencies, no network, no credentials.
 
 **macOS only.** This is a menu bar app built on Cocoa/`NSStatusBar` — that concept
 doesn't exist on Windows, so there's no version of this for a PC.
@@ -55,10 +56,27 @@ Desktop open for a bit, or click the menu bar icon → Refresh Now.
 
 It is **not** your total monthly token allowance.
 
-Your account is on an **Enterprise** plan. The usage API reports no 5-hour or weekly
-rate-limit windows for this seat — on Enterprise those are administered org-side and
-aren't exposed per user. The single meter it does report is **extra usage**: the
-pay-as-you-go spend that applies *on top of* whatever your seat includes.
+**What gets reported depends on the org.** Claude Desktop logs one or more meters
+per sample, each a percent used:
+
+| Key | Shown as | Resets | Notes |
+|---|---|---|---|
+| `xu` | Extra usage | Billing cycle (calendar month, or `cycleLengthDays`) | Pay-as-you-go spend on top of what the seat includes |
+| `fh` | 5-hour window | ~5h after the window starts | Inferred, not documented |
+| `sd` | 7-day window | ~7d after the window starts | Inferred, not documented |
+
+One Enterprise org reported only `xu`; another reports only `fh` and `sd`. When
+`xu` is present it's the headline; otherwise the 7-day window is (it's the one that
+can lock you out for days); failing both, whichever meter is furthest along. When
+there's more than one meter, **Show in Menu Bar** in the menu lets you pick which one
+the menu bar shows; the choice sticks across restarts. Unknown keys are shown as-is, with no pace estimate.
+
+**Budgets are per org, and so is the display.** The log is shared across orgs — if
+you switch, new samples just carry a different `org` ID. ClaudeMeter only reads
+samples from the org Claude Desktop most recently logged, and shows that org's
+short ID in the menu.
+
+The rest of this section is about the extra-usage meter.
 
 **The actual dollar cap varies by seat** — it isn't a fixed org-wide number, so
 ClaudeMeter never shows one (see below for why it can't, even if it wanted to).
@@ -94,7 +112,10 @@ while Claude Desktop is running.
 
 ## Display
 
-- The Claude mark + `10%` — percent of the extra-usage cap **used**. The mark is
+- The Claude mark + `10% mo` — percent of the headline meter **used**, plus a tag
+  for which limit it is: `mo` for the monthly extra-usage cap (or `30d` if you set
+  `cycleLengthDays`), `5h` or `7d` for the windows. Orgs differ, so the number alone
+  could be read as a monthly budget when it's really a 5-hour window. The mark is
   extracted live from your locally installed Claude Desktop app's icon (never
   bundled by ClaudeMeter itself) as a **template image**, so macOS auto-tints it
   to match your menu bar's own text color automatically, in any theme — the same
@@ -105,12 +126,15 @@ while Claude Desktop is running.
   writing to the log entirely (see the table above) — a figure that simply
   hasn't moved yet is still the correct current value, so it isn't dimmed.
 
-Click for a two-line pace readout:
+Click for the menu. The top line says what kind of limits your org has, e.g.
+"Limits: 5-hour + 7-day windows (no monthly budget)" or "Limits: monthly cap".
+Below that, every meter's percent used, then a two-line pace readout:
 
-- **Verdict line** — 🔺 trending over the cap (with roughly how many days until it
+- **Verdict line** — 🔺 trending over the limit (with roughly how long until it
   hits), ⚠️ cutting it close, or ✅ trending under it — each with the projected
-  percent (or day count) that backs it up
-- **Rate line** — percent-of-cap consumed per day, and days left in the cycle
+  percent (or time left) that backs it up
+- **Rate line** — percent used per day (per hour for the windows), and time until
+  the reset
 
 For the full breakdown (which rate window was used, the exact exhaustion date,
 etc.), run `--dump` from a terminal (below) rather than the menu — the menu is
@@ -126,6 +150,12 @@ deliberate — a quiet afternoon right after a heavy morning shouldn't make a re
 trend disappear from the display. The cycle is assumed to reset on the calendar
 month unless you set `cycleLengthDays` in the config file (below) to use a rolling
 window instead.
+
+For the 5-hour and 7-day windows, the reset isn't in the log, so it's estimated:
+the first figure after the last drop to a lower value marks the window's start,
+and the reset is 5h (or 7d) after that. It can run late by up to one gap between
+figures. Once that estimated reset has passed, the menu says the window may have
+reset and waits for a new figure instead of projecting from a stale one.
 
 **Early in a cycle, with only a few samples, this projection can swing hard** — a
 single burst of usage early on can extrapolate into a scary-looking projected
