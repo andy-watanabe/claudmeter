@@ -79,5 +79,6 @@ claudemeter`.
   attach it to a GitHub release with `gh release create vX.Y.Z dist/ClaudeMeter.zip`.
   Then bump `url` and `sha256` in the Homebrew formula (repo
   `andy-watanabe/homebrew-claudmeter`, `Formula/claudemeter.rb`) to the new tag.
-- Never bundle Anthropic's logo or mascot. The menu bar mark is extracted at
-  runtime from the user's installed Claude Desktop.
+- Never bundle or copy Anthropic's logo or mascot (including Clawd). The menu
+  bar icon is Sprout, an original pixel critter drawn in code (`sproutPixels`
+  in `main.swift`). Its body fills from the bottom as the headline limit is used.

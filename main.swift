@@ -413,76 +413,77 @@ func computePace(currentPercent: Double, samples: [Sample], meterKey: String, co
 
 // MARK: - Menu bar icon
 
-/// The real Claude app icon, read from the locally installed Claude Desktop at
-/// runtime — never bundled or redistributed by this app, just looked up the same
-/// way Finder or the Dock would show any other app's icon.
-private let claudeAppPaths = ["/Applications/Claude.app"]
-
-func loadClaudeIcon() -> NSImage? {
-    for path in claudeAppPaths where FileManager.default.fileExists(atPath: path) {
-        return NSWorkspace.shared.icon(forFile: path)
-    }
-    return nil
-}
-
-/// Extracts just the sunburst mark from the app icon — dropping both the solid
-/// background fill and the thin rim around its rounded-square edge — as a
-/// template image: a shape-only mask with no fixed color of its own, so AppKit
-/// auto-tints it to match the surrounding menu bar text exactly, in any theme
-/// (the same mechanism most menu bar icons use, e.g. the lock/extension icons
-/// next to this one).
+/// Sprout, ClaudeMeter's own pixel critter. Its body fills from the bottom as
+/// the headline limit is used up, so the icon shows how much is gone before
+/// you read the number. Drawn in code, no image files, and original on
+/// purpose: this app never bundles Anthropic's logo or mascot.
 ///
-/// Two passes over the pixels: brightness picks out the white mark (and,
-/// unfortunately, the rim, which is bright too); a margin around the edges then
-/// discards the rim specifically, since it hugs the icon's outer edge and the
-/// rays don't reach that far. The result is cropped tightly to the mark's own
-/// bounding box so it fills the small icon frame instead of floating in
-/// transparent padding.
-func silhouette(of icon: NSImage, pixelSize: Int = 512, threshold: CGFloat = 0.6,
-                 edgeInset: CGFloat = 0.18) -> NSImage? {
-    var rect = NSRect(x: 0, y: 0, width: pixelSize, height: pixelSize)
-    guard let cgImage = icon.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
-    let width = cgImage.width, height = cgImage.height
-    guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
-                                   bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-    else { return nil }
-    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-    guard let data = context.data else { return nil }
+/// `#` is always solid (antenna, feet). `b` is body: its outer edge is always
+/// solid and the inside fills. `e` is an eye: solid while the body around it is
+/// empty, a hole once it fills, so the face always shows. Top row first.
+///
+/// The outline is what makes this work on any wallpaper. macOS squeezes menu
+/// bar icons into a narrow contrast band on tinted menu bars, so a faint
+/// "empty" body vanished there; solid-or-clear pixels don't.
+private let sproutPixels = [
+    "........##........",
+    ".........#........",
+    ".....bbbbbbbb.....",
+    "...bbbbbbbbbbbb...",
+    "..bbbbbbbbbbbbbb..",
+    ".bbbbbbbbbbbbbbbb.",
+    ".bbbbeebbbbeebbbb.",
+    ".bbbbeebbbbeebbbb.",
+    ".bbbbeebbbbeebbbb.",
+    ".bbbbbbbbbbbbbbbb.",
+    ".bbbbbbbbbbbbbbbb.",
+    ".bbbbbbbbbbbbbbbb.",
+    ".bbbbbbbbbbbbbbbb.",
+    "..bbbbbbbbbbbbbb..",
+    "...###......###...",
+    "...###......###...",
+]
 
-    let buffer = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
-    let insetPx = Int(CGFloat(width) * edgeInset)
-    var minX = width, maxX = 0, minY = height, maxY = 0
+/// A template image: shape only, no color of its own, so AppKit tints it to
+/// match the menu bar text in any theme.
+///
+/// One grid pixel is one point (two device pixels on Retina), which keeps the
+/// pixel art crisp. Blank columns are trimmed so the number sits right next to it.
+func sproutIcon(percentUsed: Double?) -> NSImage {
+    let rows = sproutPixels.map(Array.init)
+    let bodyRows = rows.indices.filter { rows[$0].contains("b") }
+    let fraction = min(max(percentUsed ?? 0, 0), 100) / 100
+    let filledCount = Int((fraction * Double(bodyRows.count)).rounded())
+    let filledRows = Set(bodyRows.suffix(filledCount))
 
-    for y in 0..<height {
-        for x in 0..<width {
-            let i = (y * width + x) * 4
-            let alpha = CGFloat(buffer[i + 3]) / 255
-            let nearEdge = x < insetPx || x >= width - insetPx || y < insetPx || y >= height - insetPx
-            guard alpha > 0.95, !nearEdge else { buffer[i + 3] = 0; continue }
-            let luminance = 0.299 * CGFloat(buffer[i]) / 255
-                + 0.587 * CGFloat(buffer[i + 1]) / 255
-                + 0.114 * CGFloat(buffer[i + 2]) / 255
-            let keep = luminance > threshold
-            buffer[i + 3] = keep ? 255 : 0
-            buffer[i] = 255; buffer[i + 1] = 255; buffer[i + 2] = 255 // template images ignore RGB anyway
-            if keep {
-                minX = min(minX, x); maxX = max(maxX, x)
-                minY = min(minY, y); maxY = max(maxY, y)
-            }
+    func isEdge(_ y: Int, _ x: Int) -> Bool {
+        [(y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)].contains { ny, nx in
+            !rows.indices.contains(ny) || !rows[ny].indices.contains(nx) || rows[ny][nx] == "."
         }
     }
-    guard let fullCG = context.makeImage(), maxX > minX, maxY > minY else { return nil }
 
-    let pad = Int(CGFloat(maxX - minX) * 0.06)
-    let cropRect = CGRect(x: max(0, minX - pad), y: max(0, minY - pad),
-                           width: min(width, maxX - minX + pad * 2),
-                           height: min(height, maxY - minY + pad * 2))
-    guard let croppedCG = fullCG.cropping(to: cropRect) else { return nil }
+    let usedColumns = rows.flatMap { row in row.indices.filter { row[$0] != "." } }
+    let firstColumn = usedColumns.min() ?? 0, lastColumn = usedColumns.max() ?? 0
 
-    let result = NSImage(cgImage: croppedCG, size: NSSize(width: 18, height: 18))
-    result.isTemplate = true
-    return result
+    let image = NSImage(size: NSSize(width: lastColumn - firstColumn + 1, height: rows.count),
+                        flipped: true) { _ in
+        NSColor.black.setFill()
+        for (y, row) in rows.enumerated() {
+            for (x, pixel) in row.enumerated() {
+                let solid: Bool
+                switch pixel {
+                case "#": solid = true
+                case "b": solid = filledRows.contains(y) || isEdge(y, x)
+                case "e": solid = !filledRows.contains(y)
+                default: solid = false
+                }
+                if solid { NSRect(x: x - firstColumn, y: y, width: 1, height: 1).fill() }
+            }
+        }
+        return true
+    }
+    image.isTemplate = true
+    return image
 }
 
 // MARK: - Login item
@@ -521,7 +522,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var watcher: DispatchSourceFileSystemObject?
     private var timer: Timer?
-    private let iconSilhouette = loadClaudeIcon().flatMap { silhouette(of: $0) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -553,8 +553,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The icon is a template image, so it always matches the menu bar's own
         // text color automatically — no manual color logic needed for it, in any
-        // theme. Only the percentage text carries the warning color.
-        button.image = iconSilhouette
+        // theme. Only the percentage text carries the warning color. With no
+        // reading yet, Sprout shows empty.
+        button.image = sproutIcon(percentUsed: reading?.headline?.percentUsed)
 
         guard let reading, let headline = reading.headline else {
             button.attributedTitle = styled(" —", color: .secondaryLabelColor)

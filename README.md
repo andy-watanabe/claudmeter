@@ -3,7 +3,7 @@
 See how much of your Claude usage limit you've used, right in your Mac's menu bar,
 and whether you're on pace to run out before it resets.
 
-<img src="docs/menubar.png" alt="The menu bar showing the Claude mark, 5%, and a 7d tag" width="85">
+<img src="docs/menubar.png" alt="The menu bar showing Sprout, 30%, and a 7d tag" width="85">
 
 It works with whatever limits your Claude org has: a **monthly** cap, a **5-hour**
 and **7-day** window, or both. It reads Claude Desktop's own local log. Nothing is
