@@ -419,8 +419,9 @@ func computePace(currentPercent: Double, samples: [Sample], meterKey: String, co
 /// purpose: this app never bundles Anthropic's logo or mascot.
 ///
 /// `#` is always solid (antenna, feet). `b` is body: its outer edge is always
-/// solid and the inside fills. `e` is an eye: solid while the body around it is
-/// empty, a hole once it fills, so the face always shows. Top row first.
+/// solid and the inside fills. `e` is an eye (open, the resting pose): solid
+/// while the body around it is empty, a hole once it fills, so the face always
+/// shows. Top row first.
 ///
 /// The outline is what makes this work on any wallpaper. macOS squeezes menu
 /// bar icons into a narrow contrast band on tinted menu bars, so a faint
@@ -444,12 +445,61 @@ private let sproutPixels = [
     "...###......###...",
 ]
 
+/// "Animate Sprout" in the menu. On unless turned off.
+let animateSproutDefaultsKey = "animateSprout"
+var animateSprout: Bool {
+    get { UserDefaults.standard.object(forKey: animateSproutDefaultsKey) as? Bool ?? true }
+    set { UserDefaults.standard.set(newValue, forKey: animateSproutDefaultsKey) }
+}
+
+/// One frame of Sprout's idle moves. The default is the resting pose.
+struct SproutPose {
+    enum Eyes { case open, closed, lookingUp }
+    enum Arm: CaseIterable { case down, rising, scratchLow, scratchHigh }
+    var eyes = Eyes.open
+    var arm = Arm.down
+}
+
+struct SproutFrame {
+    var pose: SproutPose
+    var duration: TimeInterval
+}
+
+let sproutBlink = [
+    SproutFrame(pose: SproutPose(eyes: .closed), duration: 0.14),
+    SproutFrame(pose: SproutPose(), duration: 0),
+]
+
+/// Arm up, three scratches while looking up, arm down, then a blink.
+let sproutScratch: [SproutFrame] = {
+    let low = SproutFrame(pose: SproutPose(eyes: .lookingUp, arm: .scratchLow), duration: 0.15)
+    let high = SproutFrame(pose: SproutPose(eyes: .lookingUp, arm: .scratchHigh), duration: 0.15)
+    return [SproutFrame(pose: SproutPose(eyes: .lookingUp, arm: .rising), duration: 0.11)]
+        + [low, high, low, high, low, high]
+        + [SproutFrame(pose: SproutPose(arm: .rising), duration: 0.11),
+           SproutFrame(pose: SproutPose(), duration: 0.5)]
+        + sproutBlink
+}()
+
+/// The left arm, as [row, column] pixels on the same grid. It only shows up
+/// mid-scratch, and always sits outside the body.
+private func sproutArm(_ arm: SproutPose.Arm) -> [[Int]] {
+    let raised = [[9, 0], [8, 0], [7, 0], [6, 0]]
+    switch arm {
+    case .down: return []
+    case .rising: return raised
+    case .scratchLow: return raised + [[5, 0], [4, 1], [3, 1], [3, 2]]
+    case .scratchHigh: return raised + [[5, 0], [4, 1], [3, 1], [2, 2], [2, 3]]
+    }
+}
+
 /// A template image: shape only, no color of its own, so AppKit tints it to
 /// match the menu bar text in any theme.
 ///
 /// One grid pixel is one point (two device pixels on Retina), which keeps the
-/// pixel art crisp. Blank columns are trimmed so the number sits right next to it.
-func sproutIcon(percentUsed: Double?) -> NSImage {
+/// pixel art crisp. Blank columns are trimmed so the number sits right next to
+/// it, but room for the arm is always kept so the number never shifts mid-scratch.
+func sproutIcon(percentUsed: Double?, pose: SproutPose = SproutPose()) -> NSImage {
     let rows = sproutPixels.map(Array.init)
     let bodyRows = rows.indices.filter { rows[$0].contains("b") }
     let fraction = min(max(percentUsed ?? 0, 0), 100) / 100
@@ -462,7 +512,18 @@ func sproutIcon(percentUsed: Double?) -> NSImage {
         }
     }
 
+    let eyeRows = rows.indices.filter { rows[$0].contains("e") }
+    func isEye(_ y: Int, _ x: Int) -> Bool {
+        switch pose.eyes {
+        case .open: return rows[y][x] == "e"
+        case .closed: return rows[y][x] == "e" && y == eyeRows.last
+        case .lookingUp: return rows.indices.contains(y + 1) && rows[y + 1][x] == "e"
+        }
+    }
+    let arm = sproutArm(pose.arm)
+
     let usedColumns = rows.flatMap { row in row.indices.filter { row[$0] != "." } }
+        + SproutPose.Arm.allCases.flatMap(sproutArm).map { $0[1] }
     let firstColumn = usedColumns.min() ?? 0, lastColumn = usedColumns.max() ?? 0
 
     let image = NSImage(size: NSSize(width: lastColumn - firstColumn + 1, height: rows.count),
@@ -471,11 +532,16 @@ func sproutIcon(percentUsed: Double?) -> NSImage {
         for (y, row) in rows.enumerated() {
             for (x, pixel) in row.enumerated() {
                 let solid: Bool
-                switch pixel {
-                case "#": solid = true
-                case "b": solid = filledRows.contains(y) || isEdge(y, x)
-                case "e": solid = !filledRows.contains(y)
-                default: solid = false
+                if arm.contains([y, x]) {
+                    solid = true
+                } else {
+                    switch pixel {
+                    case "#": solid = true
+                    case "b", "e":
+                        solid = isEye(y, x) ? !filledRows.contains(y)
+                                            : filledRows.contains(y) || isEdge(y, x)
+                    default: solid = false
+                    }
                 }
                 if solid { NSRect(x: x - firstColumn, y: y, width: 1, height: 1).fill() }
             }
@@ -522,6 +588,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var watcher: DispatchSourceFileSystemObject?
     private var timer: Timer?
+    private var idleTimer: Timer?
+    private var blinksUntilScratch = Int.random(in: 10...16)
+    private var pose = SproutPose()
+    private var iconPercent: Double?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -531,6 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         refresh()
         startWatching()
+        scheduleNextMove()
 
         // Backstop for the file watch, and it keeps the "updated N ago" text honest.
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
@@ -555,7 +626,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // text color automatically — no manual color logic needed for it, in any
         // theme. Only the percentage text carries the warning color. With no
         // reading yet, Sprout shows empty.
-        button.image = sproutIcon(percentUsed: reading?.headline?.percentUsed)
+        iconPercent = reading?.headline?.percentUsed
+        button.image = sproutIcon(percentUsed: iconPercent, pose: pose)
 
         guard let reading, let headline = reading.headline else {
             button.attributedTitle = styled(" —", color: .secondaryLabelColor)
@@ -745,6 +817,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         login.state = launchesAtLogin() ? .on : .off
         menu.addItem(login)
 
+        let animate = NSMenuItem(title: "Animate Sprout",
+                                 action: #selector(toggleAnimation),
+                                 keyEquivalent: "")
+        animate.target = self
+        animate.state = animateSprout ? .on : .off
+        menu.addItem(animate)
+
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
@@ -757,6 +836,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleLaunchAtLogin() {
         setLaunchAtLogin(!launchesAtLogin())
         refresh()
+    }
+
+    @objc private func toggleAnimation() {
+        animateSprout.toggle()
+        scheduleNextMove()
+        refresh()
+    }
+
+    // MARK: Sprout's idle moves
+
+    /// A blink every 4-9 seconds, and every so often a head scratch in place of
+    /// one (roughly every minute or two). One timer per move, not a frame loop,
+    /// so Sprout costs nothing between moves. Stays still when Reduce Motion is
+    /// on or "Animate Sprout" is off.
+    private func scheduleNextMove() {
+        idleTimer?.invalidate()
+        idleTimer = nil
+        guard animateSprout else { return }
+        let timer = Timer(timeInterval: .random(in: 4...9), repeats: false) { [weak self] _ in
+            guard let self else { return }
+            guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+                return self.scheduleNextMove()
+            }
+            let frames: [SproutFrame]
+            if self.blinksUntilScratch == 0 {
+                frames = sproutScratch
+                self.blinksUntilScratch = Int.random(in: 10...16)
+            } else {
+                frames = sproutBlink
+                self.blinksUntilScratch -= 1
+            }
+            self.play(frames) { self.scheduleNextMove() }
+        }
+        timer.tolerance = 1
+        RunLoop.main.add(timer, forMode: .common)
+        idleTimer = timer
+    }
+
+    private func play(_ frames: [SproutFrame], then done: @escaping () -> Void) {
+        guard let frame = frames.first else { return done() }
+        pose = frame.pose
+        statusItem.button?.image = sproutIcon(percentUsed: iconPercent, pose: pose)
+        DispatchQueue.main.asyncAfter(deadline: .now() + frame.duration) { [weak self] in
+            self?.play(Array(frames.dropFirst()), then: done)
+        }
     }
 
     // MARK: File watching

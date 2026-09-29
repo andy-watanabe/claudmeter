@@ -90,6 +90,9 @@ month resets or an admin raises it.
 - **Show in Menu Bar:** if you have more than one limit, pick which one the menu
   bar shows. It defaults to the monthly cap if you have one, otherwise the 7-day
   window.
+- **Animate Sprout:** Sprout, the little menu bar critter, blinks now and then and
+  sometimes scratches its head. Untick this to keep it still. It also stays still
+  if Reduce Motion is on in macOS accessibility settings.
 - **Start at Login**, **Refresh Now**, **Quit**.
 
 ## Good to know
