@@ -427,22 +427,22 @@ func computePace(currentPercent: Double, samples: [Sample], meterKey: String, co
 /// bar icons into a narrow contrast band on tinted menu bars, so a faint
 /// "empty" body vanished there; solid-or-clear pixels don't.
 private let sproutPixels = [
-    "........##........",
-    ".........#........",
-    ".....bbbbbbbb.....",
-    "...bbbbbbbbbbbb...",
-    "..bbbbbbbbbbbbbb..",
-    ".bbbbbbbbbbbbbbbb.",
-    ".bbbbeebbbbeebbbb.",
-    ".bbbbeebbbbeebbbb.",
-    ".bbbbeebbbbeebbbb.",
-    ".bbbbbbbbbbbbbbbb.",
-    ".bbbbbbbbbbbbbbbb.",
-    ".bbbbbbbbbbbbbbbb.",
-    ".bbbbbbbbbbbbbbbb.",
-    "..bbbbbbbbbbbbbb..",
-    "...###......###...",
-    "...###......###...",
+    ".........##........",
+    "..........#........",
+    "......bbbbbbbb.....",
+    "....bbbbbbbbbbbb...",
+    "...bbbbbbbbbbbbbb..",
+    "..bbbbbbbbbbbbbbbb.",
+    "..bbbbeebbbbeebbbb.",
+    "..bbbbeebbbbeebbbb.",
+    "..bbbbeebbbbeebbbb.",
+    "..bbbbbbbbbbbbbbbb.",
+    "..bbbbbbbbbbbbbbbb.",
+    "..bbbbbbbbbbbbbbbb.",
+    "..bbbbbbbbbbbbbbbb.",
+    "...bbbbbbbbbbbbbb..",
+    "....###......###...",
+    "....###......###...",
 ]
 
 /// "Animate Sprout" in the menu. On unless turned off.
@@ -470,6 +470,8 @@ let sproutBlink = [
     SproutFrame(pose: SproutPose(), duration: 0),
 ]
 
+let sproutScratchInterval: TimeInterval = 15
+
 /// Arm up, three scratches while looking up, arm down, then a blink.
 let sproutScratch: [SproutFrame] = {
     let low = SproutFrame(pose: SproutPose(eyes: .lookingUp, arm: .scratchLow), duration: 0.15)
@@ -482,14 +484,15 @@ let sproutScratch: [SproutFrame] = {
 }()
 
 /// The left arm, as [row, column] pixels on the same grid. It only shows up
-/// mid-scratch, and always sits outside the body.
+/// mid-scratch, and stands one pixel off the body (the grid's blank column 1)
+/// so it reads as an arm, not a thicker outline.
 private func sproutArm(_ arm: SproutPose.Arm) -> [[Int]] {
-    let raised = [[9, 0], [8, 0], [7, 0], [6, 0]]
+    let raised = [[9, 1], [8, 0], [7, 0], [6, 0]]
     switch arm {
     case .down: return []
     case .rising: return raised
-    case .scratchLow: return raised + [[5, 0], [4, 1], [3, 1], [3, 2]]
-    case .scratchHigh: return raised + [[5, 0], [4, 1], [3, 1], [2, 2], [2, 3]]
+    case .scratchLow: return raised + [[5, 0], [4, 1], [3, 2], [3, 3]]
+    case .scratchHigh: return raised + [[5, 0], [4, 1], [3, 2], [2, 3], [2, 4]]
     }
 }
 
@@ -589,7 +592,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var watcher: DispatchSourceFileSystemObject?
     private var timer: Timer?
     private var idleTimer: Timer?
-    private var blinksUntilScratch = Int.random(in: 10...16)
+    private var nextScratch = Date().addingTimeInterval(sproutScratchInterval)
     private var pose = SproutPose()
     private var iconPercent: Double?
 
@@ -846,28 +849,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Sprout's idle moves
 
-    /// A blink every 4-9 seconds, and every so often a head scratch in place of
-    /// one (roughly every minute or two). One timer per move, not a frame loop,
+    /// A blink every 4-9 seconds, and a head scratch every 15 seconds. One timer
+    /// per move, not a frame loop,
     /// so Sprout costs nothing between moves. Stays still when Reduce Motion is
     /// on or "Animate Sprout" is off.
     private func scheduleNextMove() {
         idleTimer?.invalidate()
         idleTimer = nil
         guard animateSprout else { return }
-        let timer = Timer(timeInterval: .random(in: 4...9), repeats: false) { [weak self] _ in
+        let blinkAt = Date().addingTimeInterval(.random(in: 4...9))
+        let scratching = nextScratch <= blinkAt
+        let timer = Timer(fire: scratching ? nextScratch : blinkAt, interval: 0,
+                          repeats: false) { [weak self] _ in
             guard let self else { return }
+            if scratching { self.nextScratch = Date().addingTimeInterval(sproutScratchInterval) }
             guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
                 return self.scheduleNextMove()
             }
-            let frames: [SproutFrame]
-            if self.blinksUntilScratch == 0 {
-                frames = sproutScratch
-                self.blinksUntilScratch = Int.random(in: 10...16)
-            } else {
-                frames = sproutBlink
-                self.blinksUntilScratch -= 1
-            }
-            self.play(frames) { self.scheduleNextMove() }
+            self.play(scratching ? sproutScratch : sproutBlink) { self.scheduleNextMove() }
         }
         timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
