@@ -454,7 +454,7 @@ var animateSprout: Bool {
 
 /// One frame of Sprout's idle moves. The default is the resting pose.
 struct SproutPose {
-    enum Eyes { case open, closed, lookingUp }
+    enum Eyes { case open, closed, lookingUp, lookingDown, lookingDownLeft, lookingDownRight }
     enum Arm: CaseIterable { case down, rising, scratchLow, scratchHigh }
     var eyes = Eyes.open
     var arm = Arm.down
@@ -470,7 +470,20 @@ let sproutBlink = [
     SproutFrame(pose: SproutPose(), duration: 0),
 ]
 
-let sproutScratchInterval: TimeInterval = 15
+/// How often Sprout does something bigger than a blink. Head scratches and
+/// glances take turns.
+let sproutMoveInterval: ClosedRange<TimeInterval> = 10...15
+
+/// Looks down at the screen below the menu bar, scans left, then right, then
+/// back up.
+let sproutGlance = [
+    SproutFrame(pose: SproutPose(eyes: .lookingDown), duration: 0.25),
+    SproutFrame(pose: SproutPose(eyes: .lookingDownLeft), duration: 0.6),
+    SproutFrame(pose: SproutPose(eyes: .lookingDown), duration: 0.15),
+    SproutFrame(pose: SproutPose(eyes: .lookingDownRight), duration: 0.6),
+    SproutFrame(pose: SproutPose(eyes: .lookingDown), duration: 0.25),
+    SproutFrame(pose: SproutPose(), duration: 0),
+]
 
 /// Arm up, three scratches while looking up, arm down, then a blink.
 let sproutScratch: [SproutFrame] = {
@@ -516,11 +529,18 @@ func sproutIcon(percentUsed: Double?, pose: SproutPose = SproutPose()) -> NSImag
     }
 
     let eyeRows = rows.indices.filter { rows[$0].contains("e") }
+    /// Where the eyes are in the resting pose; looking around shifts them.
+    func isOpenEye(_ y: Int, _ x: Int) -> Bool {
+        rows.indices.contains(y) && rows[y].indices.contains(x) && rows[y][x] == "e"
+    }
     func isEye(_ y: Int, _ x: Int) -> Bool {
         switch pose.eyes {
         case .open: return rows[y][x] == "e"
         case .closed: return rows[y][x] == "e" && y == eyeRows.last
-        case .lookingUp: return rows.indices.contains(y + 1) && rows[y + 1][x] == "e"
+        case .lookingUp: return isOpenEye(y + 1, x)
+        case .lookingDown: return isOpenEye(y - 1, x)
+        case .lookingDownLeft: return isOpenEye(y - 1, x + 1)
+        case .lookingDownRight: return isOpenEye(y - 1, x - 1)
         }
     }
     let arm = sproutArm(pose.arm)
@@ -592,7 +612,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var watcher: DispatchSourceFileSystemObject?
     private var timer: Timer?
     private var idleTimer: Timer?
-    private var nextScratch = Date().addingTimeInterval(sproutScratchInterval)
+    private var nextBigMove = Date().addingTimeInterval(.random(in: sproutMoveInterval))
+    private var scratchesNext = Bool.random()
     private var pose = SproutPose()
     private var iconPercent: Double?
 
@@ -849,24 +870,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Sprout's idle moves
 
-    /// A blink every 4-9 seconds, and a head scratch every 15 seconds. One timer
-    /// per move, not a frame loop,
-    /// so Sprout costs nothing between moves. Stays still when Reduce Motion is
-    /// on or "Animate Sprout" is off.
+    /// A blink every 4-9 seconds, and every 10-15 seconds a bigger move: a head
+    /// scratch or a glance around the screen, taking turns. One timer per move,
+    /// not a frame loop, so Sprout costs nothing between moves. Stays still when
+    /// Reduce Motion is on or "Animate Sprout" is off.
     private func scheduleNextMove() {
         idleTimer?.invalidate()
         idleTimer = nil
         guard animateSprout else { return }
         let blinkAt = Date().addingTimeInterval(.random(in: 4...9))
-        let scratching = nextScratch <= blinkAt
-        let timer = Timer(fire: scratching ? nextScratch : blinkAt, interval: 0,
+        let bigMove = nextBigMove <= blinkAt
+        let timer = Timer(fire: bigMove ? nextBigMove : blinkAt, interval: 0,
                           repeats: false) { [weak self] _ in
             guard let self else { return }
-            if scratching { self.nextScratch = Date().addingTimeInterval(sproutScratchInterval) }
+            var frames = sproutBlink
+            if bigMove {
+                frames = self.scratchesNext ? sproutScratch : sproutGlance
+                self.scratchesNext.toggle()
+                self.nextBigMove = Date().addingTimeInterval(.random(in: sproutMoveInterval))
+            }
             guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
                 return self.scheduleNextMove()
             }
-            self.play(scratching ? sproutScratch : sproutBlink) { self.scheduleNextMove() }
+            self.play(frames) { self.scheduleNextMove() }
         }
         timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
