@@ -13,8 +13,7 @@ to act when a step needs their hands (a system dialog, a password, a click).
    signed in. ClaudeMeter reads
    `~/Library/Application Support/Claude/plan-usage-history.json`, which Claude
    Desktop writes. If that file is missing, Claude Desktop hasn't logged anything
-   yet: have them open it, sign in, and leave it running. The first figure can
-   take up to ~15 minutes.
+   yet: have them open it and sign in. It logs a figure when it starts.
 3. **Check the Swift compiler:** `command -v swiftc`. If it's missing, run
    `xcode-select --install`. That opens a macOS dialog: tell them to click
    Install and wait (several minutes), then continue. Don't try to work around it.
@@ -40,7 +39,8 @@ assume. The `Limits:` line says what their org reports:
 | `fh` | `5h` | A short rolling limit | About 5 hours after the window starts |
 | `sd` | `7d` | A weekly rolling limit | About 7 days after the window starts |
 
-Cover, in plain words:
+Cover, in plain words (and mention that Sprout's fill is the Mac's load, not
+Claude usage; the `Mac:` lines at the end of `--dump` explain it):
 
 - **What they have.** A monthly cap, 5-hour + 7-day windows, or both. If there's
   no `xu`, say clearly that there's no monthly budget in the data — people often
@@ -55,9 +55,13 @@ Cover, in plain words:
 
 Be honest about what's uncertain:
 
-- `fh`/`sd` are **inferred**, not documented by Anthropic. `fh` behaves like a
-  5-hour window. `sd` has been seen dropping to 0 overnight, which doesn't fit a
-  true 7-day window, so its reset time is a best guess.
+- **Figures can be hours old.** Claude Desktop only checks usage at startup
+  unless its own menu bar panel is opened daily. Check `figure at:` in `--dump`.
+  A `reset:` line means that limit has likely reset since, so its old percent
+  doesn't apply. Quitting and reopening Claude Desktop fetches a fresh figure.
+- **Reset times are estimates**, worked out from when figures last dropped. The
+  keys themselves are confirmed (`fh` = five_hour, `sd` = seven_day, from Claude
+  Desktop's code).
 - ClaudeMeter can't show a dollar amount. That figure isn't stored anywhere on
   the Mac. Claude Desktop's own usage popover, or their admin, has it.
 - The pace estimate swings early in a cycle. It's a trend, not a forecast.
@@ -81,4 +85,6 @@ claudemeter`.
   `andy-watanabe/homebrew-claudmeter`, `Formula/claudemeter.rb`) to the new tag.
 - Never bundle or copy Anthropic's logo or mascot (including Clawd). The menu
   bar icon is Sprout, an original pixel critter drawn in code (`sproutPixels`
-  in `main.swift`). Its body fills from the bottom as the headline limit is used.
+  in `main.swift`). Its body fills from the bottom as the Mac gets busier
+  (`MacLoad.score`: the worst of CPU, memory pressure, and heat); it droops at
+  75 and sweats at 90. The number beside it is still Claude usage.

@@ -72,9 +72,10 @@ enum DataHealth {
     case figureLagging
     case notPolling
 
-    /// Only a genuinely stalled log justifies dimming the display -- a figure
-    /// that simply hasn't moved is still the correct current value.
-    var shouldDim: Bool { self == .notPolling }
+    /// Never, now: Claude Desktop pauses its checks by design, so a quiet log is
+    /// normal and a dimmed menu bar would be permanent. Staleness that matters --
+    /// a window that has rolled over -- is shown on the figure itself instead.
+    var shouldDim: Bool { false }
 }
 
 func dataHealth(figureAt: Date, lastPollAt: Date?, now: Date = Date()) -> DataHealth {
@@ -120,15 +121,19 @@ enum MeterCycle {
     case unknown
 }
 
-/// "xu" is the key seen on an org whose only limit was the extra-usage cap.
-/// "fh"/"sd" are inferred, not documented: they appeared together on an org with
-/// no extra usage, "fh" climbs fast and "sd" slowly -- consistent with the 5-hour
-/// and 7-day rate-limit windows.
+/// The keys are Claude Desktop's own short names, from the code that writes the
+/// log: five_hour → "fh", seven_day → "sd", seven_day_opus → "so", and so on, plus
+/// "xu" for extra usage. The per-model and per-surface ones haven't been seen in a
+/// real log yet. "om"/"op" are internal codenames, so they're left as-is.
 func meterInfo(forKey key: String) -> (label: String, cycle: MeterCycle) {
     switch key {
     case "xu": return ("Extra usage", .billing)
     case "fh": return ("5-hour window", .window(5 * 60 * 60))
     case "sd": return ("7-day window", .window(7 * 86400))
+    case "so": return ("7-day Opus window", .window(7 * 86400))
+    case "sn": return ("7-day Sonnet window", .window(7 * 86400))
+    case "cw": return ("7-day Cowork window", .window(7 * 86400))
+    case "oa": return ("7-day connected-apps window", .window(7 * 86400))
     default: return (key, .unknown)
     }
 }
@@ -338,6 +343,27 @@ func trimToCurrentCycle(_ points: [Sample], key: String) -> [(date: Date, percen
     return Array(series[startIndex...])
 }
 
+/// Whether a meter has probably reset since its last figure, so that figure no
+/// longer describes now. Claude Desktop only fetches new figures at startup now
+/// (it pauses background checks unless its own menu bar panel was opened in the
+/// last day), so a figure can easily be a day old. Showing a window's old 27% as
+/// current, after the window has rolled over, is the one thing this app must not do.
+func likelyResetSinceLastFigure(key: String, samples: [Sample], config: Config, now: Date = Date()) -> Bool {
+    let cycle = trimToCurrentCycle(samples, key: key)
+    guard let start = cycle.first, let last = cycle.last else { return false }
+    switch meterInfo(forKey: key).cycle {
+    case .window(let length):
+        return start.date.addingTimeInterval(length) <= now
+    case .billing:
+        if let days = config.cycleLengthDays {
+            return start.date.addingTimeInterval(Double(days) * 86400) <= now
+        }
+        return !Calendar.current.isDate(last.date, equalTo: now, toGranularity: .month)
+    case .unknown:
+        return false
+    }
+}
+
 /// Needs at least ~20 minutes of same-cycle history to say anything meaningful;
 /// below that a single noisy sample could produce a wild extrapolated rate.
 /// Returns nil for meters whose reset we don't know, and for a window whose
@@ -411,11 +437,322 @@ func computePace(currentPercent: Double, samples: [Sample], meterKey: String, co
                          secondsRemaining: secondsRemaining, exhaustionDate: exhaustionDate)
 }
 
+// MARK: - Mac load
+//
+// Sprout's fill shows how hard the Mac is working, not Claude usage: since
+// Claude Desktop stopped checking usage in the background, usage figures can be
+// hours old, while the Mac's load is always live. The menu explains the fill,
+// and traces busy processes back to the Claude session that started them --
+// the one thing Activity Monitor can't tell you.
+
+enum MemoryPressure: Int {
+    case normal = 1, warning = 2, critical = 4
+
+    static var current: MemoryPressure {
+        var level: Int32 = 1
+        var size = MemoryLayout<Int32>.size
+        sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0)
+        return MemoryPressure(rawValue: Int(level)) ?? .normal
+    }
+
+    /// On the same 0-100 scale as CPU. Swapping hard slows everything even with
+    /// idle cores, so "warning" counts as strained on its own.
+    var score: Double { switch self { case .normal: 0; case .warning: 80; case .critical: 95 } }
+    var label: String { switch self { case .normal: "normal"; case .warning: "high"; case .critical: "critical" } }
+}
+
+struct MacLoad {
+    /// Share of all cores busy, smoothed over about half a minute.
+    var cpuPercent: Double
+    /// Processes running or waiting to run, averaged over the last minute.
+    var loadAverage: Double
+    var cores: Int
+    var memoryPressure: MemoryPressure
+    var swapUsedGB: Double
+    var swapTotalGB: Double
+    var thermal: ProcessInfo.ThermalState
+
+    private var thermalScore: Double {
+        switch thermal {
+        case .nominal: 0
+        case .fair: 50
+        case .serious: 85
+        case .critical: 100
+        @unknown default: 0
+        }
+    }
+
+    /// 0-100: whichever of CPU, memory, or heat is worst. One bad one is enough
+    /// to make the Mac feel slow.
+    var score: Double { max(cpuPercent, memoryPressure.score, thermalScore) }
+
+    var level: String {
+        switch score {
+        case ..<40: "Calm"
+        case ..<75: "Busy"
+        case ..<90: "Strained"
+        default: "Overloaded"
+        }
+    }
+
+    var color: NSColor { score >= 90 ? .systemRed : score >= 75 ? .systemOrange : .labelColor }
+
+    /// Sprout droops at "Strained", and sweats at "Overloaded".
+    var tired: Bool { score >= 75 }
+    var sweating: Bool { score >= 90 }
+}
+
+/// Samples CPU ticks every few seconds. Busy share comes from the change in
+/// ticks between samples, smoothed so one spike doesn't flap the icon.
+final class MacLoadSampler {
+    private var lastTicks: (busy: Double, total: Double)?
+    private var smoothedCPU: Double?
+
+    private static func ticks() -> (busy: Double, total: Double)? {
+        var info = host_cpu_load_info()
+        var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return nil }
+        let t = info.cpu_ticks
+        let user = Double(t.0), system = Double(t.1), idle = Double(t.2), nice = Double(t.3)
+        return (user + system + nice, user + system + idle + nice)
+    }
+
+    /// `interval` is the seconds since the last call, for the smoothing.
+    func sample(interval: TimeInterval = 5) -> MacLoad {
+        if let now = Self.ticks() {
+            if let last = lastTicks, now.total > last.total {
+                let busy = 100 * (now.busy - last.busy) / (now.total - last.total)
+                let alpha = 1 - exp(-interval / 30)
+                smoothedCPU = smoothedCPU.map { $0 + alpha * (busy - $0) } ?? busy
+            }
+            lastTicks = now
+        }
+
+        var loads = [Double](repeating: 0, count: 3)
+        getloadavg(&loads, 3)
+
+        var swap = xsw_usage()
+        var size = MemoryLayout<xsw_usage>.size
+        sysctlbyname("vm.swapusage", &swap, &size, nil, 0)
+
+        return MacLoad(cpuPercent: smoothedCPU ?? 0,
+                       loadAverage: loads[0],
+                       cores: ProcessInfo.processInfo.activeProcessorCount,
+                       memoryPressure: .current,
+                       swapUsedGB: Double(swap.xsu_used) / 1_073_741_824,
+                       swapTotalGB: Double(swap.xsu_total) / 1_073_741_824,
+                       thermal: ProcessInfo.processInfo.thermalState)
+    }
+}
+
+/// One process from `ps`.
+struct ProcessEntry {
+    var pid: Int32
+    var ppid: Int32
+    var cpu: Double
+    var memoryKB: Double
+    var path: String
+}
+
+/// What's using the Mac, grouped the way a person thinks about it: by app, or by
+/// the Claude session that started the work.
+struct LoadGroup {
+    var label: String
+    var cpu: Double
+    var memoryKB: Double
+}
+
+struct ProcessSnapshot {
+    var groups: [LoadGroup]
+    var claudeSessions: Int
+    var claudeSessionMemoryKB: Double
+}
+
+func runCommand(_ path: String, _ arguments: [String]) -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = arguments
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch { return "" }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return String(decoding: data, as: UTF8.self)
+}
+
+func listProcesses() -> [ProcessEntry] {
+    // comm last: it's the full executable path, which can contain spaces.
+    runCommand("/bin/ps", ["-Ao", "pid=,ppid=,pcpu=,rss=,comm="])
+        .split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: " ", maxSplits: 4, omittingEmptySubsequences: true)
+            guard parts.count == 5, let pid = Int32(parts[0]), let ppid = Int32(parts[1]),
+                  let cpu = Double(parts[2]), let rss = Double(parts[3]) else { return nil }
+            return ProcessEntry(pid: pid, ppid: ppid, cpu: cpu, memoryKB: rss, path: String(parts[4]))
+        }
+}
+
+/// A Claude Code session: the Code tab in Claude Desktop runs one under
+/// Application Support, the terminal one under ~/.local/share/claude.
+func isClaudeCodeSession(_ path: String) -> Bool {
+    (path.contains("/claude-code/") && path.hasSuffix("/claude"))
+        || path.contains("/.local/share/claude/versions/")
+}
+
+/// The folder a process is working in, e.g. the project a Claude session is in.
+func workingDirectory(of pid: Int32) -> String? {
+    var info = proc_vnodepathinfo()
+    let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+    guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+    let path = withUnsafeBytes(of: info.pvi_cdir.vip_path) {
+        String(cString: $0.bindMemory(to: CChar.self).baseAddress!)
+    }
+    return path.isEmpty ? nil : path
+}
+
+/// "npm exec vitest run", "swift-frontend -frontend…": paths cut to the program
+/// name, and the whole thing kept short enough for a menu row.
+func shortCommand(_ command: String) -> String {
+    let words = command.split(separator: " ").prefix(4).map { word in
+        word.hasPrefix("/") ? (String(word) as NSString).lastPathComponent : String(word)
+    }
+    let text = words.joined(separator: " ")
+    return text.count > 32 ? String(text.prefix(31)) + "…" : text
+}
+
+func commandLine(of pid: Int32) -> String {
+    runCommand("/bin/ps", ["-o", "args=", "-p", "\(pid)"]).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// "Google Chrome" for anything inside Google Chrome.app, helpers included;
+/// the file name for anything else.
+func appName(forPath path: String) -> String {
+    if let app = path.split(separator: "/").first(where: { $0.hasSuffix(".app") }) {
+        return String(app.dropLast(4))
+    }
+    return (path as NSString).lastPathComponent
+}
+
+func takeProcessSnapshot() -> ProcessSnapshot {
+    let processes = listProcesses()
+    let byPID = Dictionary(processes.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
+
+    /// The process's ancestors, nearest first, stopping at launchd.
+    func ancestors(of pid: Int32) -> [ProcessEntry] {
+        var chain: [ProcessEntry] = []
+        var current = byPID[pid]?.ppid
+        while let id = current, id > 1, let parent = byPID[id], chain.count < 40 {
+            chain.append(parent)
+            current = parent.ppid
+        }
+        return chain
+    }
+
+    var groups: [String: LoadGroup] = [:]
+    var commandBySession: [Int32: (pid: Int32, cpu: Double)] = [:]
+
+    for process in processes where process.pid != getpid() {
+        let chain = ancestors(of: process.pid)
+        var key: String
+        if isClaudeCodeSession(process.path) {
+            key = "claude:\(process.pid)"
+        } else if let sessionIndex = chain.firstIndex(where: { isClaudeCodeSession($0.path) }) {
+            let session = chain[sessionIndex]
+            key = "claude:\(session.pid)"
+            // The command the session ran: its child, or the shell's child when
+            // it ran through a shell, which Claude Code always does.
+            let path = [process] + chain
+            let below = Array(path[..<(sessionIndex + 1)].reversed())  // child of session first
+            var command = below.first
+            if let first = command, ["zsh", "bash", "sh"].contains((first.path as NSString).lastPathComponent),
+               below.count > 1 {
+                command = below[1]
+            }
+            if let command, process.cpu > (commandBySession[session.pid]?.cpu ?? 0) {
+                commandBySession[session.pid] = (command.pid, process.cpu)
+            }
+        } else {
+            key = "app:" + appName(forPath: process.path)
+        }
+        var group = groups[key] ?? LoadGroup(label: key, cpu: 0, memoryKB: 0)
+        group.cpu += process.cpu
+        group.memoryKB += process.memoryKB
+        groups[key] = group
+    }
+
+    // Labels for Claude sessions: the project folder, and what it's running.
+    // The command's own folder beats the session's: sessions often start in a
+    // parent folder like ~/code and cd into the project to run things.
+    for (key, var group) in groups where key.hasPrefix("claude:") {
+        guard let pid = Int32(key.dropFirst("claude:".count)) else { continue }
+        let command = group.cpu >= 10 ? commandBySession[pid] : nil
+        let folder = (command.flatMap { workingDirectory(of: $0.pid) } ?? workingDirectory(of: pid))
+            .map { ($0 as NSString).lastPathComponent } ?? "?"
+        var label = "Claude · \(folder)"
+        if let command {
+            let text = shortCommand(commandLine(of: command.pid))
+            if !text.isEmpty { label += ": \(text)" }
+        }
+        group.label = label
+        groups[key] = group
+    }
+    for (key, var group) in groups where key.hasPrefix("app:") {
+        group.label = String(key.dropFirst("app:".count))
+        groups[key] = group
+    }
+
+    let sessions = processes.filter { isClaudeCodeSession($0.path) }
+    return ProcessSnapshot(groups: groups.values.sorted { $0.cpu > $1.cpu },
+                           claudeSessions: sessions.count,
+                           claudeSessionMemoryKB: sessions.reduce(0) { $0 + $1.memoryKB })
+}
+
+/// "1.4 cores", "40% of a core".
+func coresText(_ cpuPercent: Double) -> String {
+    cpuPercent >= 95 ? String(format: "%.1f cores", cpuPercent / 100) : "\(Int(cpuPercent.rounded()))% of a core"
+}
+
+func gigabytes(_ kilobytes: Double) -> String { String(format: "%.1f GB", kilobytes / 1_048_576) }
+
+/// The lines the menu and `--dump` show for the Mac.
+func macLoadLines(_ load: MacLoad, _ snapshot: ProcessSnapshot) -> [(text: String, emphasis: Bool)] {
+    var lines: [(String, Bool)] = []
+    lines.append(("Mac: \(load.level) — Sprout is \(Int(load.score.rounded()))% full", true))
+    lines.append((String(format: "CPU %.0f%% busy · %.0f tasks for %d cores",
+                         load.cpuPercent, load.loadAverage, load.cores), false))
+    var memory = "Memory pressure \(load.memoryPressure.label)"
+    if load.swapTotalGB > 0 {
+        memory += String(format: " · swap %.1f of %.0f GB", load.swapUsedGB, load.swapTotalGB)
+    }
+    lines.append((memory, false))
+    if load.thermal == .serious || load.thermal == .critical {
+        lines.append(("Running hot — macOS is slowing the chip down", false))
+    }
+    let busiest = snapshot.groups.prefix(3).filter { $0.cpu >= 10 }
+    if !busiest.isEmpty {
+        lines.append(("Busiest:", false))
+        for group in busiest { lines.append(("  \(group.label) · \(coresText(group.cpu))", false)) }
+    }
+    if let biggest = snapshot.groups.max(by: { $0.memoryKB < $1.memoryKB }) {
+        lines.append(("Most memory: \(biggest.label) · \(gigabytes(biggest.memoryKB))", false))
+    }
+    if snapshot.claudeSessions > 0 {
+        lines.append(("\(snapshot.claudeSessions) Claude Code sessions open · "
+                      + gigabytes(snapshot.claudeSessionMemoryKB), false))
+    }
+    return lines
+}
+
 // MARK: - Menu bar icon
 
 /// Sprout, ClaudeMeter's own pixel critter. Its body fills from the bottom as
-/// the headline limit is used up, so the icon shows how much is gone before
-/// you read the number. Drawn in code, no image files, and original on
+/// the Mac gets busier (see `MacLoad.score`), and it droops and sweats when the
+/// Mac is struggling. Drawn in code, no image files, and original on
 /// purpose: this app never bundles Anthropic's logo or mascot.
 ///
 /// `#` is always solid (antenna, feet). `b` is body: its outer edge is always
@@ -515,10 +852,11 @@ private func sproutArm(_ arm: SproutPose.Arm) -> [[Int]] {
 /// One grid pixel is one point (two device pixels on Retina), which keeps the
 /// pixel art crisp. Blank columns are trimmed so the number sits right next to
 /// it, but room for the arm is always kept so the number never shifts mid-scratch.
-func sproutIcon(percentUsed: Double?, pose: SproutPose = SproutPose()) -> NSImage {
+func sproutIcon(fill: Double?, tired: Bool = false, sweating: Bool = false,
+                pose: SproutPose = SproutPose()) -> NSImage {
     let rows = sproutPixels.map(Array.init)
     let bodyRows = rows.indices.filter { rows[$0].contains("b") }
-    let fraction = min(max(percentUsed ?? 0, 0), 100) / 100
+    let fraction = min(max(fill ?? 0, 0), 100) / 100
     let filledCount = Int((fraction * Double(bodyRows.count)).rounded())
     let filledRows = Set(bodyRows.suffix(filledCount))
 
@@ -535,8 +873,9 @@ func sproutIcon(percentUsed: Double?, pose: SproutPose = SproutPose()) -> NSImag
     }
     func isEye(_ y: Int, _ x: Int) -> Bool {
         switch pose.eyes {
-        case .open: return rows[y][x] == "e"
-        case .closed: return rows[y][x] == "e" && y == eyeRows.last
+        // Tired: heavy lids, so each eye is a slit. A tired blink shuts it.
+        case .open: return rows[y][x] == "e" && (!tired || y == eyeRows.last)
+        case .closed: return rows[y][x] == "e" && y == eyeRows.last && !tired
         case .lookingUp: return isOpenEye(y + 1, x)
         case .lookingDown: return isOpenEye(y - 1, x)
         case .lookingDownLeft: return isOpenEye(y - 1, x + 1)
@@ -544,9 +883,12 @@ func sproutIcon(percentUsed: Double?, pose: SproutPose = SproutPose()) -> NSImag
         }
     }
     let arm = sproutArm(pose.arm)
+    /// A drop of sweat off the top right of the head, clear of the body.
+    let sweatDrop = [[2, 17], [3, 17]]
 
     let usedColumns = rows.flatMap { row in row.indices.filter { row[$0] != "." } }
         + SproutPose.Arm.allCases.flatMap(sproutArm).map { $0[1] }
+        + sweatDrop.map { $0[1] }
     let firstColumn = usedColumns.min() ?? 0, lastColumn = usedColumns.max() ?? 0
 
     let image = NSImage(size: NSSize(width: lastColumn - firstColumn + 1, height: rows.count),
@@ -555,7 +897,7 @@ func sproutIcon(percentUsed: Double?, pose: SproutPose = SproutPose()) -> NSImag
         for (y, row) in rows.enumerated() {
             for (x, pixel) in row.enumerated() {
                 let solid: Bool
-                if arm.contains([y, x]) {
+                if arm.contains([y, x]) || (sweating && sweatDrop.contains([y, x])) {
                     solid = true
                 } else {
                     switch pixel {
@@ -615,7 +957,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var nextBigMove = Date().addingTimeInterval(.random(in: sproutMoveInterval))
     private var scratchesNext = Bool.random()
     private var pose = SproutPose()
-    private var iconPercent: Double?
+    private let loadSampler = MacLoadSampler()
+    private lazy var macLoad = loadSampler.sample()
+    private var loadTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -631,6 +975,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+
+        // Sprout follows the Mac's load. A few cheap system reads every 5
+        // seconds; the process list is only read when the menu is built.
+        loadTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.macLoad = self.loadSampler.sample(interval: 5)
+            self.statusItem.button?.image = self.currentSprout()
+        }
+        loadTimer?.tolerance = 1
     }
 
     // MARK: Display
@@ -650,26 +1003,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // text color automatically — no manual color logic needed for it, in any
         // theme. Only the percentage text carries the warning color. With no
         // reading yet, Sprout shows empty.
-        iconPercent = reading?.headline?.percentUsed
-        button.image = sproutIcon(percentUsed: iconPercent, pose: pose)
+        let config = loadConfig()
+        let log = loadLog()
+        let headlineReset = reading?.headline.map {
+            likelyResetSinceLastFigure(key: $0.key, samples: log.samples, config: config)
+        } ?? false
+        button.image = currentSprout()
 
         guard let reading, let headline = reading.headline else {
             button.attributedTitle = styled(" —", color: .secondaryLabelColor)
             button.alphaValue = 0.5
-            button.toolTip = "No usage figures recorded yet. Claude Desktop writes these every ~15 minutes."
+            button.toolTip = "No usage figures recorded yet. Claude Desktop logs one when it starts."
             return
         }
 
         let used = headline.percentUsed
-        let color: NSColor = used >= 90 ? .systemRed : used >= 75 ? .systemOrange : .labelColor
+        let color: NSColor = headlineReset ? .secondaryLabelColor
+            : used >= 90 ? .systemRed : used >= 75 ? .systemOrange : .labelColor
         // The tag matters: orgs differ, and "23%" alone reads as a monthly budget
         // even when it's a 5-hour window.
-        let tag = cadenceTag(forKey: headline.key, config: loadConfig())
-        let title = NSMutableAttributedString(attributedString: styled(" \(Int(used.rounded()))%", color: color))
+        let tag = cadenceTag(forKey: headline.key, config: config)
+        let number = headlineReset ? " —" : " \(Int(used.rounded()))%"
+        let title = NSMutableAttributedString(attributedString: styled(number, color: color))
         title.append(styled(" \(tag)", color: dimmed(color, alpha: 0.5)))
         button.attributedTitle = title
         button.alphaValue = (health?.shouldDim ?? false) ? 0.5 : 1.0
-        button.toolTip = usedLine(key: headline.key, percent: used)
+        button.toolTip = headlineReset
+            ? "\(label(forMeterKey: headline.key)) has likely reset since the last figure (was \(Int(used.rounded()))%)"
+            : usedLine(key: headline.key, percent: used)
+    }
+
+    private func currentSprout() -> NSImage {
+        sproutIcon(fill: macLoad.score, tired: macLoad.tired, sweating: macLoad.sweating, pose: pose)
     }
 
     /// `withAlphaComponent` on a dynamic color like `.labelColor` pins it to the
@@ -729,7 +1094,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard let reading, let headline = reading.headline else {
             info("No usage data yet")
-            info("Claude Desktop records this every ~15 min")
+            info("Claude Desktop logs a figure when it starts")
+            addMacSection(to: menu)
             addControls(to: menu)
             return
         }
@@ -737,11 +1103,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let config = loadConfig()
         let used = headline.percentUsed
         info(limitsSummary(meterKeys: Array(reading.meters.keys), config: config), color: .secondaryLabelColor)
-        info(usedLine(key: headline.key, percent: used))
+        func meterLine(_ key: String, _ percent: Double) {
+            if likelyResetSinceLastFigure(key: key, samples: log.samples, config: config) {
+                info("\(label(forMeterKey: key)): reset since last figure (was \(Int(percent.rounded()))%)",
+                     color: .secondaryLabelColor)
+            } else {
+                info(usedLine(key: key, percent: percent))
+            }
+        }
+        meterLine(headline.key, used)
 
         // Anything beyond the headline meter, shown rather than hidden.
-        for (key, otherUsed) in reading.meters.sorted(by: { $0.key < $1.key }) where key != headline.key {
-            info(usedLine(key: key, percent: otherUsed))
+        for (key, otherUsed) in reading.meters.sorted(by: { cadenceOrder($0.key) < cadenceOrder($1.key) })
+        where key != headline.key {
+            meterLine(key, otherUsed)
         }
 
         menu.addItem(.separator())
@@ -760,17 +1135,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         switch health {
-        case .notPolling:
-            // The log itself has stalled, so Claude Desktop really is the thing
-            // to check -- this is the only case where that advice is right.
-            info("⚠︎ Claude Desktop isn't logging — figures are frozen", color: .systemOrange)
-        case .figureLagging:
-            info("Claude hasn't reported a new figure in a while", color: .secondaryLabelColor)
+        case .notPolling, .figureLagging:
+            // Claude Desktop now checks usage only when it starts (unless its own
+            // menu bar panel is opened daily), so this is expected, not a fault.
+            info("Claude Desktop sends new figures when it starts up", color: .secondaryLabelColor)
         case .fresh, .none:
             break
         }
 
+        addMacSection(to: menu)
         addControls(to: menu, reading: reading)
+    }
+
+    private func addMacSection(to menu: NSMenu) {
+        menu.addItem(.separator())
+        for line in macLoadLines(macLoad, takeProcessSnapshot()) {
+            menu.addItem(infoItem(line.text, color: line.emphasis ? macLoad.color : .secondaryLabelColor))
+        }
     }
 
     /// The "am I trending over or under" readout, kept to two lines: a verdict with
@@ -782,7 +1163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       meterKey: meterKey, config: config) else {
             switch meterCycle {
             case .unknown: info("Pace: unknown reset for \"\(meterKey)\"", .secondaryLabelColor)
-            case .window: info("Pace: window may have reset — waiting for a new figure", .secondaryLabelColor)
+            case .window: info("Pace: picks up again with the next figure", .secondaryLabelColor)
             case .billing: info("Pace: not enough data yet", .secondaryLabelColor)
             }
             return
@@ -879,7 +1260,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         idleTimer = nil
         guard animateSprout else { return }
         let blinkAt = Date().addingTimeInterval(.random(in: 4...9))
-        let bigMove = nextBigMove <= blinkAt
+        // A tired Sprout only blinks: no energy for scratching or looking around.
+        let bigMove = nextBigMove <= blinkAt && !macLoad.tired
         let timer = Timer(fire: bigMove ? nextBigMove : blinkAt, interval: 0,
                           repeats: false) { [weak self] _ in
             guard let self else { return }
@@ -902,7 +1284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func play(_ frames: [SproutFrame], then done: @escaping () -> Void) {
         guard let frame = frames.first else { return done() }
         pose = frame.pose
-        statusItem.button?.image = sproutIcon(percentUsed: iconPercent, pose: pose)
+        statusItem.button?.image = currentSprout()
         DispatchQueue.main.asyncAfter(deadline: .now() + frame.duration) { [weak self] in
             self?.play(Array(frames.dropFirst()), then: done)
         }
@@ -946,6 +1328,16 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) { refresh() }
 }
 
+/// CPU busy share needs two samples, so this takes a short look first.
+func printMacLoad() {
+    let sampler = MacLoadSampler()
+    _ = sampler.sample()
+    Thread.sleep(forTimeInterval: 1)
+    let load = sampler.sample(interval: 1)
+    print("")
+    for line in macLoadLines(load, takeProcessSnapshot()) { print(line.text) }
+}
+
 // `--dump` runs the same read path as the menu bar and prints the result, for
 // checking the numbers or piping them somewhere else.
 if CommandLine.arguments.contains("--dump") {
@@ -953,6 +1345,7 @@ if CommandLine.arguments.contains("--dump") {
     let samples = log.samples
     guard let reading = loadReading(from: samples), let headline = reading.headline else {
         print("no usage data in \(usageLogPath)")
+        printMacLoad()
         exit(1)
     }
     let config = loadConfig()
@@ -966,6 +1359,10 @@ if CommandLine.arguments.contains("--dump") {
     print("figure at:  \(reading.sampledAt)")
     print("last poll:  \(log.lastPollAt.map { "\($0)" } ?? "never")")
     print("health:     \(health)")
+    for key in reading.meters.keys.sorted()
+    where likelyResetSinceLastFigure(key: key, samples: samples, config: config) {
+        print("reset:      \(key) has likely reset since its last figure")
+    }
 
     if let pace = computePace(currentPercent: used, samples: samples, meterKey: headline.key, config: config) {
         let result = verdict(currentPercent: used, projectedEndPercent: pace.projectedEndPercent)
@@ -983,6 +1380,7 @@ if CommandLine.arguments.contains("--dump") {
     } else {
         print("pace:       not enough data yet")
     }
+    printMacLoad()
     exit(0)
 }
 

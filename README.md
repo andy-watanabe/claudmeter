@@ -1,7 +1,8 @@
 # ClaudeMeter
 
 See how much of your Claude usage limit you've used, right in your Mac's menu bar,
-and whether you're on pace to run out before it resets.
+and whether you're on pace to run out before it resets. Plus how hard your Mac is
+working, and which Claude session is making it work.
 
 <img src="docs/menubar.png" alt="The menu bar showing Sprout, 30%, and a 7d tag" width="85">
 
@@ -60,11 +61,15 @@ Both build from source, which needs the Xcode Command Line Tools
 (`xcode-select --install`). Re-run the script, or `brew upgrade`, to update.
 
 **No number yet?** The menu says "No usage data yet" until Claude Desktop records
-its first figure, which can take about 15 minutes. Leave Claude Desktop open.
+its first figure, which it does when it starts. Quit and reopen Claude Desktop.
 
 ## Reading it
 
-The number is **percent used**. The tag next to it says which limit it is:
+**Sprout** (the little critter) shows how hard your Mac is working. Its body fills
+up as the Mac gets busier. When the Mac is strained its eyes droop, and when it's
+overloaded it sweats and stops fidgeting.
+
+The number next to Sprout is your Claude **percent used**. The tag next to it says which limit it is:
 
 | Tag | Limit | Resets |
 |---|---|---|
@@ -87,6 +92,10 @@ month resets or an admin raises it.
 - Every limit's percent used.
 - **Pace:** ✅ trending under, ⚠️ cutting it close, or 🔺 on pace to hit the limit
   (and roughly when). Plus your rate, and time until reset.
+- **Mac:** how busy it is (Calm, Busy, Strained, Overloaded), CPU and memory, and
+  what's busiest. Work started by Claude Code is traced back to its session and
+  project, e.g. "Claude · my-project: npm exec vitest run · 6.3 cores", so you
+  can see which session is hogging the Mac.
 - **Show in Menu Bar:** if you have more than one limit, pick which one the menu
   bar shows. It defaults to the monthly cap if you have one, otherwise the 7-day
   window.
@@ -98,10 +107,15 @@ month resets or an admin raises it.
 
 ## Good to know
 
-- **The 5-hour and 7-day labels are a best guess.** Claude Desktop logs them as
-  `fh` and `sd` without saying what they are. `fh` behaves like a 5-hour window.
-  `sd` has been seen resetting overnight, which doesn't fit a true 7-day window,
-  so treat its reset time as rough.
+- **Figures can be hours old.** Claude Desktop now checks your usage only when it
+  starts up, unless you open its own menu bar panel at least once a day. So
+  ClaudeMeter usually shows the figure from Claude Desktop's last launch. Within a
+  limit's window that figure only goes up, so it's a floor, not an overstatement.
+  Once a window has likely reset since then, the menu bar shows `—` and the menu
+  says "reset since last figure", rather than an old number. Quitting and
+  reopening Claude Desktop fetches a fresh figure.
+- **Reset times are estimates.** The log doesn't include them, so ClaudeMeter
+  works them out from when each window's figures last dropped.
 - **No dollar amounts.** Your cap's dollar value isn't stored anywhere on your
   Mac, so ClaudeMeter can't show it. Claude Desktop's own usage popover, or your
   admin, has it.
@@ -109,8 +123,6 @@ month resets or an admin raises it.
   heading over. It settles as more data comes in.
 - **One org at a time.** If you switch Claude orgs, ClaudeMeter follows the one
   Claude Desktop is signed into now, and shows its short ID in the menu.
-- **It only updates while Claude Desktop is running.** If Claude Desktop stops
-  logging, the menu bar dims and the menu says so.
 
 ## Uninstall
 
@@ -124,20 +136,18 @@ claudemeter`.
 <summary>Where the data comes from</summary>
 
 `~/Library/Application Support/Claude/plan-usage-history.json`, the log Claude
-Desktop appends to every ~15 minutes. ClaudeMeter watches it and updates when it
-changes, with a 60-second check as a backstop.
+Desktop writes each time it checks your usage. ClaudeMeter watches it and updates
+when it changes, with a 60-second check as a backstop.
 
-Most entries carry no figure; an actual percentage lands every 1–2.5 hours. So
-"Claude Desktop stopped logging" and "the figure hasn't changed" are different
-things:
+Claude Desktop used to check every ~15 minutes. Since early October 2026 it pauses
+those checks unless its own menu bar panel was opened in the last 24 hours, and
+otherwise only checks when it starts. Its log says so: `[plan-usage] background
+poll paused: tray not opened recently` in `~/Library/Logs/Claude/main.log`.
 
-| What's happening | What you see |
-|---|---|
-| Logging, figure current | Just the figure's timestamp |
-| Logging, but no new figure in 4h+ | A quiet note in the menu |
-| No log entry at all in 45min+ | ⚠︎ warning, and the menu bar dims |
-
-Only the last one means something is wrong.
+The meter keys are Claude Desktop's own: `fh` is `five_hour`, `sd` is
+`seven_day`, `xu` is extra usage. There are also per-model and per-surface weekly
+limits (`so` Opus, `sn` Sonnet, `cw` Cowork, `oa` connected apps) that ClaudeMeter
+labels if your org reports them.
 
 The log is shared across orgs; each entry carries an `org` ID. ClaudeMeter only
 uses entries from the org that logged most recently, since budgets are per org.
