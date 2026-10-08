@@ -1,17 +1,16 @@
-# ClaudeMeter
+# Sprout
 
-See how much of your Claude usage limit you've used, right in your Mac's menu bar,
-and whether you're on pace to run out before it resets. Plus how hard your Mac is
-working, and which Claude session is making it work.
+A little critter in your Mac's menu bar that shows how hard your Mac is working,
+and what's making it work, down to which Claude Code session and project.
 
-<img src="docs/menubar.png" alt="The menu bar showing Sprout, 30%, and a 7d tag" width="85">
+<img src="docs/menubar.png" alt="Sprout in the menu bar, orange and at 80% while the Mac is strained" width="70">
 
-It works with whatever limits your Claude org has: a **monthly** cap, a **5-hour**
-and **7-day** window, or both. It reads Claude Desktop's own local log. Nothing is
+Sprout's body fills up as your Mac gets busier. When the Mac is strained, Sprout
+turns orange and pants. When it's overloaded, it turns red, sweats, and runs, faster
+the harder the Mac is working. Everything is read from your own Mac: nothing is
 sent anywhere, and it needs no password or API key.
 
-**Needs:** a Mac, with [Claude Desktop](https://claude.ai/download) installed and
-signed in.
+**Needs:** a Mac.
 
 ## Get it running
 
@@ -23,183 +22,113 @@ If you have Claude Code (in the terminal, or the Code tab in Claude Desktop),
 paste this in:
 
 ```text
-Clone https://github.com/andy-watanabe/claudmeter into ~/claudmeter, read its
-CLAUDE.md, and follow it to set ClaudeMeter up for me. Then explain my numbers.
+Clone https://github.com/andy-watanabe/sprout into ~/sprout, read its CLAUDE.md,
+and follow it to set Sprout up for me. Then tell me how my Mac is doing.
 ```
 
-Claude installs any missing tools, builds the app, starts it, and tells you what
-your limits are and where you stand. If something goes wrong, it fixes it.
+Claude installs any missing tools, builds the app, starts it, and tells you
+what's loading your Mac. If something goes wrong, it fixes it.
 
 ### Option 2: Download the app
 
-1. Download [ClaudeMeter.zip](https://github.com/andy-watanabe/claudmeter/releases/latest/download/ClaudeMeter.zip)
+1. Download [Sprout.zip](https://github.com/andy-watanabe/sprout/releases/latest/download/Sprout.zip)
    and double-click it to unzip.
-2. Drag **ClaudeMeter** into your **Applications** folder, and open it.
+2. Drag **Sprout** into your **Applications** folder, and open it.
 3. macOS will say it can't verify the app. That's because it isn't signed by a
    paid Apple developer account, not because anything is wrong with it. Click
    **Done**, then open **System Settings → Privacy & Security**, scroll down, and
-   click **Open Anyway** next to ClaudeMeter. You only do this once.
-4. Click the new menu bar icon and turn on **Start at Login**.
+   click **Open Anyway** next to Sprout. You only do this once.
+4. Click Sprout in the menu bar and turn on **Start at Login**.
 
 To update, download it again and replace the old copy.
 
 ### Option 3: Homebrew or script (for developers)
 
 ```bash
-brew tap andy-watanabe/claudmeter
-brew install claudemeter
-claudemeter &
+brew tap andy-watanabe/sprout
+brew install sprout
+sprout &
 ```
 
 Or, without Homebrew:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/andy-watanabe/claudmeter/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/andy-watanabe/sprout/main/install.sh | bash
 ```
 
 Both build from source, which needs the Xcode Command Line Tools
 (`xcode-select --install`). Re-run the script, or `brew upgrade`, to update.
 
-**No number yet?** The menu says "No usage data yet" until Claude Desktop records
-its first figure, which it does when it starts. Quit and reopen Claude Desktop.
+**Coming from ClaudeMeter?** Sprout is its new name. The install script replaces
+ClaudeMeter and keeps your Start at Login setting.
 
 ## Reading it
 
-**Sprout** (the little critter) shows how hard your Mac is working. Its body fills
-up as the Mac gets busier. When the Mac is strained its eyes droop, and when it's
-overloaded it sweats and stops fidgeting.
+The number is how hard your Mac is working, 0–100%. It's whichever is worst right
+now: CPU, memory, or heat. Any one of them maxed out is enough to make the Mac
+feel slow.
 
-The number next to Sprout is your Claude **percent used**. The tag next to it says which limit it is:
-
-| Tag | Limit | Resets |
+| Level | Load | Sprout |
 |---|---|---|
-| `mo` | Monthly extra-usage cap | Start of each month |
-| `5h` | 5-hour window | About 5 hours after it starts |
-| `7d` | 7-day window | About 7 days after it starts |
+| Calm | under 40% | Fidgets: blinks, scratches its head, looks around |
+| Busy | 40–75% | Same, just fuller |
+| Strained | 75–90% | Turns orange, droopy eyes, pants (bobs about once a second) |
+| Overloaded | 90%+ | Turns red, sweats, and runs in place: the busier the Mac, the faster it runs |
 
-The number turns orange at 75% and red at 90%.
+macOS mutes colors in the menu bar, so the orange and red look softer there than
+you might expect; the movement is the louder signal.
 
-**What happens at 100%?** You can't send more messages until that limit resets.
-If your org has extra usage turned on, you may be able to keep going and be billed
-instead. For the monthly cap, 100% means the extra spend is used up until the
-month resets or an admin raises it.
+**Click Sprout** for the details:
 
-**Click the icon** for more:
+- **CPU:** how busy, and how many tasks are queued for your cores. More tasks
+  than cores means work is waiting its turn.
+- **Memory:** macOS's memory pressure, and how much swap (disk standing in for
+  RAM) is in use.
+- **Busiest:** the top things using CPU, grouped by app. Work started by Claude
+  Code is traced back to its session, e.g. "Claude · Canvas catalog: npm exec
+  vitest run · 3.0 cores". Hover it to **Stop** that command.
+- **Most memory.**
+- **Claude Code sessions:** every session running on your Mac, by its title, with
+  whether it's active or how long it's been idle. Claude Desktop keeps sessions
+  running after you leave them, so this is usually more than you're using.
+  "Running twice" means two copies of one session; one is left over. Hover a
+  session to see what it's running and **Stop** any of it. ⚠︎ marks a command
+  running for over an hour, which is usually a wait loop or a run that hung.
 
-- **Limits:** what your org has, e.g. "Limits: 5-hour + 7-day windows (no monthly
-  budget)". If it says no monthly budget, you don't have one, even if you assumed
-  you did.
-- Every limit's percent used.
-- **Pace:** ✅ trending under, ⚠️ cutting it close, or 🔺 on pace to hit the limit
-  (and roughly when). Plus your rate, and time until reset.
-- **Mac:** how busy it is (Calm, Busy, Strained, Overloaded), CPU and memory, and
-  what's busiest. Work started by Claude Code is traced back to its session and
-  project, e.g. "Claude · my-project: npm exec vitest run · 6.3 cores", so you
-  can see which session is hogging the Mac.
-- **Show in Menu Bar:** if you have more than one limit, pick which one the menu
-  bar shows. It defaults to the monthly cap if you have one, otherwise the 7-day
-  window.
-- **Animate Sprout:** Sprout, the little menu bar critter, blinks now and then,
-  and every 10-15 seconds scratches its head or glances around the screen. Untick
-  this to keep it still. It also stays still if Reduce Motion is on in macOS
-  accessibility settings.
-- **Start at Login**, **Refresh Now**, **Quit**.
+  Stop always asks first. It ends that one command (Claude sees it finish), not
+  the session. To close a session itself, archive it in Claude Desktop.
+- **Start at Login**, **Animate Sprout** (untick to keep it still, color and all
+  else unchanged; it also stays still if Reduce Motion is on), **Quit**.
 
-## Good to know
+Sprout itself uses next to nothing: a few cheap system reads every 5 seconds, and
+it only lists processes when you open its menu. Panting costs about 1% of one
+core, and only runs while the Mac is strained.
 
-- **Figures can be hours old.** Claude Desktop now checks your usage only when it
-  starts up, unless you open its own menu bar panel at least once a day. So
-  ClaudeMeter usually shows the figure from Claude Desktop's last launch. Within a
-  limit's window that figure only goes up, so it's a floor, not an overstatement.
-  Once a window has likely reset since then, the menu bar shows `—` and the menu
-  says "reset since last figure", rather than an old number. Quitting and
-  reopening Claude Desktop fetches a fresh figure.
-- **Reset times are estimates.** The log doesn't include them, so ClaudeMeter
-  works them out from when each window's figures last dropped.
-- **No dollar amounts.** Your cap's dollar value isn't stored anywhere on your
-  Mac, so ClaudeMeter can't show it. Claude Desktop's own usage popover, or your
-  admin, has it.
-- **Early in a cycle, the pace swings.** One busy morning can look like you're
-  heading over. It settles as more data comes in.
-- **One org at a time.** If you switch Claude orgs, ClaudeMeter follows the one
-  Claude Desktop is signed into now, and shows its short ID in the menu.
+## Taming a busy Mac
+
+The usual culprit with several Claude Code sessions is test runners and builds
+running at the same time. Each one tries to use every core, so two or three at
+once swamp the machine. Capping each run helps a lot, e.g. `vitest run
+--maxWorkers=2`, `jest --maxWorkers=2`, or `pytest -n 2`.
 
 ## Uninstall
 
-Turn off **Start at Login** in the menu, click **Quit**, then delete ClaudeMeter
-from your Applications folder (or `~/Applications`). Homebrew: `brew uninstall
-claudemeter`.
+Turn off **Start at Login** in the menu, click **Quit**, then delete Sprout from
+your Applications folder (or `~/Applications`). Homebrew: `brew uninstall sprout`.
 
-## Details
-
-<details>
-<summary>Where the data comes from</summary>
-
-`~/Library/Application Support/Claude/plan-usage-history.json`, the log Claude
-Desktop writes each time it checks your usage. ClaudeMeter watches it and updates
-when it changes, with a 60-second check as a backstop.
-
-Claude Desktop used to check every ~15 minutes. Since early October 2026 it pauses
-those checks unless its own menu bar panel was opened in the last 24 hours, and
-otherwise only checks when it starts. Its log says so: `[plan-usage] background
-poll paused: tray not opened recently` in `~/Library/Logs/Claude/main.log`.
-
-The meter keys are Claude Desktop's own: `fh` is `five_hour`, `sd` is
-`seven_day`, `xu` is extra usage. There are also per-model and per-surface weekly
-limits (`so` Opus, `sn` Sonnet, `cw` Cowork, `oa` connected apps) that ClaudeMeter
-labels if your org reports them.
-
-The log is shared across orgs; each entry carries an `org` ID. ClaudeMeter only
-uses entries from the org that logged most recently, since budgets are per org.
-
-</details>
-
-<details>
-<summary>How the pace estimate works</summary>
-
-The rate is the higher of two: the average since the current cycle started, and
-the rate over the last 3 hours. Taking the higher one means a quiet afternoon
-after a heavy morning doesn't hide a real trend.
-
-The monthly cap is assumed to reset on the calendar month. For the 5-hour and
-7-day windows the reset isn't in the log, so it's estimated: the first figure
-after the last drop marks the window's start, and the reset is 5h or 7d after
-that. It can run late by up to one gap between figures. Once that estimated reset
-passes, the menu waits for a new figure instead of projecting from a stale one.
-
-</details>
-
-<details>
-<summary>Config</summary>
-
-`~/.config/claude-meter/config.json`, optional:
-
-```json
-{ "cycleLengthDays": 30 }
-```
-
-Only set this if your monthly cap resets on a rolling N-day cycle rather than the
-calendar month.
-
-There's no dollar setting on purpose: the figure isn't stored locally, and
-reading it would mean using Claude Desktop's login to call an undocumented API.
-
-</details>
-
-<details>
-<summary>Check the numbers from a terminal</summary>
+## Check from a terminal
 
 ```bash
-~/Applications/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --dump
+~/Applications/Sprout.app/Contents/MacOS/Sprout --dump
 ```
 
-Prints every meter, the pace math, and the projected reset.
+Prints the same lines as the menu.
 
-</details>
+## History
 
-<details>
-<summary>Building and releasing</summary>
-
-See [CLAUDE.md](CLAUDE.md) for build, test, and release steps.
-
-</details>
+Sprout started as ClaudeMeter, a readout of Claude usage limits from Claude
+Desktop's local log. In October 2026 Claude Desktop stopped checking usage in
+the background unless its own menu bar panel is opened daily, so those figures
+went stale. The last ClaudeMeter version is tagged
+[`v1.5.0`](https://github.com/andy-watanabe/sprout/releases/tag/v1.5.0).
+Build and release steps are in [CLAUDE.md](CLAUDE.md).
